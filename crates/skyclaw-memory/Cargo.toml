@@ -20,3 +20,7 @@ chrono.workspace = true
 async-trait.workspace = true
 uuid.workspace = true
 regex.workspace = true
+
+[dev-dependencies]
+skyclaw-test-utils.workspace = true
+tempfile = "3"

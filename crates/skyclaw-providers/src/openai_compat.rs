@@ -610,6 +610,7 @@ fn extract_openai_sse_event(
 }
 
 /// Emit the first accumulated tool call, if any.
+#[allow(dead_code)]
 fn flush_tool_calls(
     tool_calls: &mut Vec<(String, String, String)>,
 ) -> Option<Result<StreamChunk, SkyclawError>> {
@@ -628,4 +629,172 @@ fn flush_tool_calls(
         tool_use: Some(ContentPart::ToolUse { id, name, input }),
         stop_reason: None,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_request_body_basic() {
+        let provider = OpenAICompatProvider::new("test-key".to_string());
+        let request = CompletionRequest {
+            model: "gpt-4o".to_string(),
+            messages: vec![ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text("Hello".to_string()),
+            }],
+            tools: Vec::new(),
+            max_tokens: Some(2048),
+            temperature: Some(0.9),
+            system: Some("Be concise".to_string()),
+        };
+
+        let body = provider.build_request_body(&request, false).unwrap();
+        assert_eq!(body["model"], "gpt-4o");
+        assert_eq!(body["max_tokens"], 2048);
+        // f32 precision: compare approximately
+        let temp = body["temperature"].as_f64().unwrap();
+        assert!((temp - 0.9).abs() < 0.01, "temperature should be ~0.9, got {temp}");
+        // System message should be first in messages array
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[0]["content"], "Be concise");
+        assert_eq!(msgs[1]["role"], "user");
+    }
+
+    #[test]
+    fn build_request_body_with_tools() {
+        let provider = OpenAICompatProvider::new("key".to_string());
+        let request = CompletionRequest {
+            model: "m".to_string(),
+            messages: vec![ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text("hi".to_string()),
+            }],
+            tools: vec![ToolDefinition {
+                name: "read_file".to_string(),
+                description: "Read a file".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+            }],
+            max_tokens: None,
+            temperature: None,
+            system: None,
+        };
+
+        let body = provider.build_request_body(&request, false).unwrap();
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["type"], "function");
+        assert_eq!(tools[0]["function"]["name"], "read_file");
+    }
+
+    #[test]
+    fn convert_user_message() {
+        let msg = ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text("Hello".to_string()),
+        };
+        let json = convert_message_to_openai(&msg).unwrap();
+        assert_eq!(json["role"], "user");
+        assert_eq!(json["content"], "Hello");
+    }
+
+    #[test]
+    fn convert_assistant_with_tool_calls() {
+        let msg = ChatMessage {
+            role: Role::Assistant,
+            content: MessageContent::Parts(vec![
+                ContentPart::Text { text: "Let me check".to_string() },
+                ContentPart::ToolUse {
+                    id: "call_1".to_string(),
+                    name: "shell".to_string(),
+                    input: serde_json::json!({"command": "ls"}),
+                },
+            ]),
+        };
+        let json = convert_message_to_openai(&msg).unwrap();
+        assert_eq!(json["role"], "assistant");
+        assert_eq!(json["content"], "Let me check");
+        let tool_calls = json["tool_calls"].as_array().unwrap();
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0]["function"]["name"], "shell");
+    }
+
+    #[test]
+    fn convert_tool_result_message() {
+        let msg = ChatMessage {
+            role: Role::Tool,
+            content: MessageContent::Parts(vec![
+                ContentPart::ToolResult {
+                    tool_use_id: "call_1".to_string(),
+                    content: "file.txt".to_string(),
+                    is_error: false,
+                },
+            ]),
+        };
+        let json = convert_message_to_openai(&msg).unwrap();
+        assert_eq!(json["role"], "tool");
+        assert_eq!(json["tool_call_id"], "call_1");
+        assert_eq!(json["content"], "file.txt");
+    }
+
+    #[test]
+    fn sse_text_delta() {
+        let mut buffer = "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n".to_string();
+        let mut tool_calls = Vec::new();
+
+        let result = extract_openai_sse_event(&mut buffer, &mut tool_calls);
+        assert!(result.is_some());
+        let chunk = result.unwrap().unwrap();
+        assert_eq!(chunk.delta.as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn sse_done_signal() {
+        let mut buffer = "data: [DONE]\n\n".to_string();
+        let mut tool_calls = Vec::new();
+
+        let result = extract_openai_sse_event(&mut buffer, &mut tool_calls);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn flush_tool_calls_emits_first() {
+        let mut calls = vec![
+            ("id1".to_string(), "shell".to_string(), r#"{"cmd":"ls"}"#.to_string()),
+            ("id2".to_string(), "file".to_string(), r#"{"path":"."}"#.to_string()),
+        ];
+
+        let result = flush_tool_calls(&mut calls);
+        assert!(result.is_some());
+        let chunk = result.unwrap().unwrap();
+        match chunk.tool_use {
+            Some(ContentPart::ToolUse { id, name, .. }) => {
+                assert_eq!(id, "id1");
+                assert_eq!(name, "shell");
+            }
+            _ => panic!("expected ToolUse"),
+        }
+        assert_eq!(calls.len(), 1);
+    }
+
+    #[test]
+    fn flush_tool_calls_empty() {
+        let mut calls = Vec::new();
+        assert!(flush_tool_calls(&mut calls).is_none());
+    }
+
+    #[test]
+    fn provider_name() {
+        let provider = OpenAICompatProvider::new("key".to_string());
+        assert_eq!(provider.name(), "openai-compatible");
+    }
+
+    #[test]
+    fn with_base_url_strips_trailing_slash() {
+        let provider = OpenAICompatProvider::new("key".to_string())
+            .with_base_url("https://api.example.com/v1/".to_string());
+        assert_eq!(provider.base_url, "https://api.example.com/v1");
+    }
 }

@@ -114,3 +114,101 @@ pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serde_roundtrip_inbound_message() {
+        let msg = InboundMessage {
+            id: "msg-1".to_string(),
+            channel: "telegram".to_string(),
+            chat_id: "123".to_string(),
+            user_id: "456".to_string(),
+            username: Some("alice".to_string()),
+            text: Some("Hello SkyClaw".to_string()),
+            attachments: vec![AttachmentRef {
+                file_id: "file-1".to_string(),
+                file_name: Some("doc.pdf".to_string()),
+                mime_type: Some("application/pdf".to_string()),
+                size: Some(1024),
+            }],
+            reply_to: None,
+            timestamp: chrono::Utc::now(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let restored: InboundMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.id, "msg-1");
+        assert_eq!(restored.channel, "telegram");
+        assert_eq!(restored.text.as_deref(), Some("Hello SkyClaw"));
+        assert_eq!(restored.attachments.len(), 1);
+        assert_eq!(restored.attachments[0].file_name.as_deref(), Some("doc.pdf"));
+    }
+
+    #[test]
+    fn serde_roundtrip_completion_request() {
+        let req = CompletionRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            messages: vec![ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text("Hi".to_string()),
+            }],
+            tools: vec![ToolDefinition {
+                name: "shell".to_string(),
+                description: "Execute shell commands".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+            }],
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+            system: Some("You are helpful".to_string()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let restored: CompletionRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.model, "claude-sonnet-4-20250514");
+        assert_eq!(restored.messages.len(), 1);
+        assert_eq!(restored.tools.len(), 1);
+        assert_eq!(restored.max_tokens, Some(4096));
+    }
+
+    #[test]
+    fn serde_content_part_text() {
+        let part = ContentPart::Text { text: "hello".to_string() };
+        let json = serde_json::to_string(&part).unwrap();
+        assert!(json.contains("\"type\":\"text\""));
+        let restored: ContentPart = serde_json::from_str(&json).unwrap();
+        match restored {
+            ContentPart::Text { text } => assert_eq!(text, "hello"),
+            _ => panic!("expected Text variant"),
+        }
+    }
+
+    #[test]
+    fn serde_content_part_tool_use() {
+        let part = ContentPart::ToolUse {
+            id: "tu-1".to_string(),
+            name: "shell".to_string(),
+            input: serde_json::json!({"command": "ls"}),
+        };
+        let json = serde_json::to_string(&part).unwrap();
+        let restored: ContentPart = serde_json::from_str(&json).unwrap();
+        match restored {
+            ContentPart::ToolUse { id, name, input } => {
+                assert_eq!(id, "tu-1");
+                assert_eq!(name, "shell");
+                assert_eq!(input["command"], "ls");
+            }
+            _ => panic!("expected ToolUse variant"),
+        }
+    }
+
+    #[test]
+    fn serde_role_lowercase() {
+        let role = Role::Assistant;
+        let json = serde_json::to_string(&role).unwrap();
+        assert_eq!(json, "\"assistant\"");
+
+        let restored: Role = serde_json::from_str("\"user\"").unwrap();
+        assert!(matches!(restored, Role::User));
+    }
+}

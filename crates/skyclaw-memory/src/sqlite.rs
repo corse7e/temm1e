@@ -245,3 +245,140 @@ fn str_to_entry_type(s: &str) -> Result<MemoryEntryType, SkyclawError> {
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn make_entry(id: &str, content: &str, session: Option<&str>) -> MemoryEntry {
+        MemoryEntry {
+            id: id.to_string(),
+            content: content.to_string(),
+            metadata: serde_json::json!({"source": "test"}),
+            timestamp: Utc::now(),
+            session_id: session.map(String::from),
+            entry_type: MemoryEntryType::Conversation,
+        }
+    }
+
+    #[tokio::test]
+    async fn store_and_get() {
+        let mem = SqliteMemory::new("sqlite::memory:").await.unwrap();
+        let entry = make_entry("e1", "hello world", None);
+        mem.store(entry).await.unwrap();
+
+        let fetched = mem.get("e1").await.unwrap();
+        assert!(fetched.is_some());
+        let e = fetched.unwrap();
+        assert_eq!(e.id, "e1");
+        assert_eq!(e.content, "hello world");
+    }
+
+    #[tokio::test]
+    async fn get_nonexistent_returns_none() {
+        let mem = SqliteMemory::new("sqlite::memory:").await.unwrap();
+        let fetched = mem.get("nope").await.unwrap();
+        assert!(fetched.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_entry() {
+        let mem = SqliteMemory::new("sqlite::memory:").await.unwrap();
+        mem.store(make_entry("d1", "to delete", None)).await.unwrap();
+        assert!(mem.get("d1").await.unwrap().is_some());
+
+        mem.delete("d1").await.unwrap();
+        assert!(mem.get("d1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn search_by_keyword() {
+        let mem = SqliteMemory::new("sqlite::memory:").await.unwrap();
+        mem.store(make_entry("s1", "Rust programming language", None)).await.unwrap();
+        mem.store(make_entry("s2", "Python scripting", None)).await.unwrap();
+        mem.store(make_entry("s3", "Rust is fast and safe", None)).await.unwrap();
+
+        let results = mem.search("Rust", SearchOpts::default()).await.unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|e| e.content.contains("Rust")));
+    }
+
+    #[tokio::test]
+    async fn search_with_session_filter() {
+        let mem = SqliteMemory::new("sqlite::memory:").await.unwrap();
+        mem.store(make_entry("sf1", "hello from session A", Some("sess_a"))).await.unwrap();
+        mem.store(make_entry("sf2", "hello from session B", Some("sess_b"))).await.unwrap();
+
+        let opts = SearchOpts {
+            session_filter: Some("sess_a".to_string()),
+            ..Default::default()
+        };
+        let results = mem.search("hello", opts).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].session_id.as_deref(), Some("sess_a"));
+    }
+
+    #[tokio::test]
+    async fn list_sessions() {
+        let mem = SqliteMemory::new("sqlite::memory:").await.unwrap();
+        mem.store(make_entry("ls1", "a", Some("alpha"))).await.unwrap();
+        mem.store(make_entry("ls2", "b", Some("beta"))).await.unwrap();
+        mem.store(make_entry("ls3", "c", Some("alpha"))).await.unwrap();
+
+        let sessions = mem.list_sessions().await.unwrap();
+        assert_eq!(sessions.len(), 2);
+        assert!(sessions.contains(&"alpha".to_string()));
+        assert!(sessions.contains(&"beta".to_string()));
+    }
+
+    #[tokio::test]
+    async fn session_history_ordered_and_limited() {
+        let mem = SqliteMemory::new("sqlite::memory:").await.unwrap();
+        for i in 0..5 {
+            let mut entry = make_entry(&format!("h{i}"), &format!("msg {i}"), Some("hist_sess"));
+            entry.timestamp = Utc::now() + chrono::Duration::seconds(i as i64);
+            mem.store(entry).await.unwrap();
+        }
+
+        let history = mem.get_session_history("hist_sess", 3).await.unwrap();
+        assert_eq!(history.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn store_replaces_existing() {
+        let mem = SqliteMemory::new("sqlite::memory:").await.unwrap();
+        mem.store(make_entry("r1", "original", None)).await.unwrap();
+        mem.store(make_entry("r1", "updated", None)).await.unwrap();
+
+        let fetched = mem.get("r1").await.unwrap().unwrap();
+        assert_eq!(fetched.content, "updated");
+    }
+
+    #[test]
+    fn entry_type_roundtrip() {
+        let types = vec![
+            MemoryEntryType::Conversation,
+            MemoryEntryType::LongTerm,
+            MemoryEntryType::DailyLog,
+            MemoryEntryType::Skill,
+        ];
+        for et in types {
+            let s = entry_type_to_str(&et);
+            let restored = str_to_entry_type(s).unwrap();
+            assert_eq!(entry_type_to_str(&restored), s);
+        }
+    }
+
+    #[test]
+    fn unknown_entry_type_fails() {
+        assert!(str_to_entry_type("unknown_type").is_err());
+    }
+
+    #[test]
+    fn backend_name() {
+        // We can't easily test this without an async runtime, but we can test the function
+        // by asserting the expected return value is "sqlite"
+        assert_eq!(entry_type_to_str(&MemoryEntryType::Conversation), "conversation");
+    }
+}

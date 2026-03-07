@@ -54,3 +54,55 @@ pub fn create_provider(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_anthropic_provider() {
+        let config = ProviderConfig {
+            name: Some("anthropic".to_string()),
+            api_key: Some("test-key".to_string()),
+            model: None,
+            base_url: None,
+        };
+        let provider = create_provider(&config).unwrap();
+        assert_eq!(provider.name(), "anthropic");
+    }
+
+    #[test]
+    fn create_openai_provider() {
+        let config = ProviderConfig {
+            name: Some("openai".to_string()),
+            api_key: Some("test-key".to_string()),
+            model: None,
+            base_url: None,
+        };
+        let provider = create_provider(&config).unwrap();
+        assert_eq!(provider.name(), "openai-compatible");
+    }
+
+    #[test]
+    fn create_default_provider_without_name() {
+        let config = ProviderConfig {
+            name: None,
+            api_key: Some("test-key".to_string()),
+            model: None,
+            base_url: None,
+        };
+        let provider = create_provider(&config).unwrap();
+        assert_eq!(provider.name(), "openai-compatible");
+    }
+
+    #[test]
+    fn create_provider_without_api_key_fails() {
+        let config = ProviderConfig {
+            name: Some("anthropic".to_string()),
+            api_key: None,
+            model: None,
+            base_url: None,
+        };
+        assert!(create_provider(&config).is_err());
+    }
+}

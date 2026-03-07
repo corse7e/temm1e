@@ -92,3 +92,65 @@ pub async fn build_context(
         system,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skyclaw_test_utils::{MockMemory, MockTool, make_session};
+
+    #[tokio::test]
+    async fn context_includes_system_prompt() {
+        let memory = MockMemory::new();
+        let tools: Vec<Arc<dyn Tool>> = vec![];
+        let session = make_session();
+
+        let req = build_context(&session, &memory, &tools, "test-model", Some("Custom prompt")).await;
+        assert_eq!(req.system.as_deref(), Some("Custom prompt"));
+        assert_eq!(req.model, "test-model");
+    }
+
+    #[tokio::test]
+    async fn context_default_system_prompt() {
+        let memory = MockMemory::new();
+        let tools: Vec<Arc<dyn Tool>> = vec![];
+        let session = make_session();
+
+        let req = build_context(&session, &memory, &tools, "test-model", None).await;
+        assert!(req.system.is_some());
+        assert!(req.system.unwrap().contains("SkyClaw"));
+    }
+
+    #[tokio::test]
+    async fn context_includes_tool_definitions() {
+        let memory = MockMemory::new();
+        let tools: Vec<Arc<dyn Tool>> = vec![
+            Arc::new(MockTool::new("shell")),
+            Arc::new(MockTool::new("browser")),
+        ];
+        let session = make_session();
+
+        let req = build_context(&session, &memory, &tools, "model", None).await;
+        assert_eq!(req.tools.len(), 2);
+        assert_eq!(req.tools[0].name, "shell");
+        assert_eq!(req.tools[1].name, "browser");
+    }
+
+    #[tokio::test]
+    async fn context_includes_conversation_history() {
+        let memory = MockMemory::new();
+        let tools: Vec<Arc<dyn Tool>> = vec![];
+        let mut session = make_session();
+        session.history.push(ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text("Hello".to_string()),
+        });
+        session.history.push(ChatMessage {
+            role: Role::Assistant,
+            content: MessageContent::Text("Hi there".to_string()),
+        });
+
+        let req = build_context(&session, &memory, &tools, "model", None).await;
+        // Messages should include the history
+        assert!(req.messages.len() >= 2);
+    }
+}

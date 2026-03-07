@@ -13,6 +13,7 @@ members = [
     "crates/skyclaw-automation",
     "crates/skyclaw-observable",
     "crates/skyclaw-filestore",
+    "crates/skyclaw-test-utils",
 ]
 
 [workspace.package]
@@ -104,6 +105,7 @@ skyclaw-skills = { path = "crates/skyclaw-skills" }
 skyclaw-automation = { path = "crates/skyclaw-automation" }
 skyclaw-observable = { path = "crates/skyclaw-observable" }
 skyclaw-filestore = { path = "crates/skyclaw-filestore" }
+skyclaw-test-utils = { path = "crates/skyclaw-test-utils" }
 
 [package]
 name = "skyclaw"

@@ -79,3 +79,126 @@ impl Default for SkyclawConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn test_default_config_no_file() {
+        // When no config file exists, load_config should return defaults
+        let config = load_config(None).unwrap();
+        assert_eq!(config.gateway.host, "127.0.0.1");
+        assert_eq!(config.gateway.port, 8080);
+        assert_eq!(config.memory.backend, "sqlite");
+        assert_eq!(config.vault.backend, "local-chacha20");
+        assert_eq!(config.security.sandbox, "mandatory");
+        assert!(config.channel.is_empty());
+    }
+
+    #[test]
+    fn test_load_toml_config() {
+        let toml_content = r#"
+[gateway]
+host = "0.0.0.0"
+port = 9090
+tls = true
+
+[provider]
+name = "anthropic"
+api_key = "test-key-123"
+model = "claude-sonnet-4-20250514"
+
+[memory]
+backend = "markdown"
+"#;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), toml_content).unwrap();
+
+        let config = load_config(Some(tmp.path())).unwrap();
+        assert_eq!(config.gateway.host, "0.0.0.0");
+        assert_eq!(config.gateway.port, 9090);
+        assert!(config.gateway.tls);
+        assert_eq!(config.provider.name.as_deref(), Some("anthropic"));
+        assert_eq!(config.provider.api_key.as_deref(), Some("test-key-123"));
+        assert_eq!(config.memory.backend, "markdown");
+    }
+
+    #[test]
+    fn test_load_yaml_config() {
+        let yaml_content = r#"
+gateway:
+  host: "10.0.0.1"
+  port: 3000
+memory:
+  backend: "sqlite"
+"#;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), yaml_content).unwrap();
+
+        let config = load_config(Some(tmp.path())).unwrap();
+        assert_eq!(config.gateway.host, "10.0.0.1");
+        assert_eq!(config.gateway.port, 3000);
+        assert_eq!(config.memory.backend, "sqlite");
+    }
+
+    #[test]
+    fn test_env_var_expansion_in_config() {
+        std::env::set_var("SKYCLAW_TEST_API_KEY", "expanded-key-value");
+        let toml_content = r#"
+[provider]
+name = "anthropic"
+api_key = "${SKYCLAW_TEST_API_KEY}"
+"#;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), toml_content).unwrap();
+
+        let config = load_config(Some(tmp.path())).unwrap();
+        assert_eq!(config.provider.api_key.as_deref(), Some("expanded-key-value"));
+        std::env::remove_var("SKYCLAW_TEST_API_KEY");
+    }
+
+    #[test]
+    fn test_invalid_config_file() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), "this is not valid TOML {{ or YAML").unwrap();
+
+        let result = load_config(Some(tmp.path()));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_missing_config_file() {
+        let result = load_config(Some(std::path::Path::new("/tmp/nonexistent_skyclaw_config_12345.toml")));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_with_channels() {
+        let toml_content = r#"
+[channel.telegram]
+enabled = true
+token = "bot123"
+allowlist = ["user1", "@user2"]
+file_transfer = true
+max_file_size = "50MB"
+
+[channel.discord]
+enabled = false
+"#;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), toml_content).unwrap();
+
+        let config = load_config(Some(tmp.path())).unwrap();
+        assert_eq!(config.channel.len(), 2);
+        let tg = &config.channel["telegram"];
+        assert!(tg.enabled);
+        assert_eq!(tg.token.as_deref(), Some("bot123"));
+        assert_eq!(tg.allowlist, vec!["user1", "@user2"]);
+        assert!(tg.file_transfer);
+
+        let dc = &config.channel["discord"];
+        assert!(!dc.enabled);
+    }
+}

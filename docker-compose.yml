@@ -1,0 +1,51 @@
+version: "3.9"
+
+services:
+  skyclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: skyclaw:latest
+    container_name: skyclaw
+    ports:
+      - "8080:8080"
+    environment:
+      - SKYCLAW_MODE=auto
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - RUST_LOG=info
+    volumes:
+      - skyclaw-data:/var/lib/skyclaw
+      - ${HOME}/.skyclaw:/home/skyclaw/.skyclaw
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+  # -----------------------------------------------
+  # Optional: PostgreSQL for persistent memory
+  # Uncomment to enable.
+  # -----------------------------------------------
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: skyclaw-postgres
+  #   environment:
+  #     POSTGRES_DB: skyclaw
+  #     POSTGRES_USER: skyclaw
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U skyclaw"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+volumes:
+  skyclaw-data:
+  # pgdata:

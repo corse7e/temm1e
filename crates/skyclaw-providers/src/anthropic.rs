@@ -412,6 +412,7 @@ impl Provider for AnthropicProvider {
 // SSE parsing helpers
 // ---------------------------------------------------------------------------
 
+// Make the SSE parsing function visible to tests
 /// Try to extract and parse the next complete SSE event from the buffer.
 /// Returns `Some(Result<StreamChunk>)` if an event was parsed, `None` if more data is needed.
 fn extract_sse_event(
@@ -544,5 +545,178 @@ fn extract_sse_event(
                 continue;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_request_body_basic() {
+        let provider = AnthropicProvider::new("test-key".to_string());
+        let request = CompletionRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            messages: vec![ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text("Hello".to_string()),
+            }],
+            tools: Vec::new(),
+            max_tokens: Some(1024),
+            temperature: Some(0.5),
+            system: Some("Be helpful".to_string()),
+        };
+
+        let body = provider.build_request_body(&request, false).unwrap();
+        assert_eq!(body["model"], "claude-sonnet-4-20250514");
+        assert_eq!(body["max_tokens"], 1024);
+        assert_eq!(body["temperature"], 0.5);
+        assert_eq!(body["system"], "Be helpful");
+        assert!(body.get("stream").is_none());
+    }
+
+    #[test]
+    fn build_request_body_with_stream() {
+        let provider = AnthropicProvider::new("key".to_string());
+        let request = CompletionRequest {
+            model: "m".to_string(),
+            messages: vec![ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text("Hi".to_string()),
+            }],
+            tools: Vec::new(),
+            max_tokens: None,
+            temperature: None,
+            system: None,
+        };
+
+        let body = provider.build_request_body(&request, true).unwrap();
+        assert_eq!(body["stream"], true);
+    }
+
+    #[test]
+    fn build_request_body_with_tools() {
+        let provider = AnthropicProvider::new("key".to_string());
+        let request = CompletionRequest {
+            model: "m".to_string(),
+            messages: vec![ChatMessage {
+                role: Role::User,
+                content: MessageContent::Text("Hi".to_string()),
+            }],
+            tools: vec![ToolDefinition {
+                name: "shell".to_string(),
+                description: "Run shell commands".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+            }],
+            max_tokens: None,
+            temperature: None,
+            system: None,
+        };
+
+        let body = provider.build_request_body(&request, false).unwrap();
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], "shell");
+        assert_eq!(tools[0]["input_schema"]["type"], "object");
+    }
+
+    #[test]
+    fn convert_message_filters_system() {
+        let msg = ChatMessage {
+            role: Role::System,
+            content: MessageContent::Text("system prompt".to_string()),
+        };
+        let result = convert_message_to_anthropic(&msg);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn convert_message_user_text() {
+        let msg = ChatMessage {
+            role: Role::User,
+            content: MessageContent::Text("Hello".to_string()),
+        };
+        let json = convert_message_to_anthropic(&msg).unwrap();
+        assert_eq!(json["role"], "user");
+        assert_eq!(json["content"], "Hello");
+    }
+
+    #[test]
+    fn convert_message_tool_role_becomes_user() {
+        let msg = ChatMessage {
+            role: Role::Tool,
+            content: MessageContent::Text("tool result".to_string()),
+        };
+        let json = convert_message_to_anthropic(&msg).unwrap();
+        assert_eq!(json["role"], "user");
+    }
+
+    #[test]
+    fn convert_tool_definition() {
+        let tool = ToolDefinition {
+            name: "browser".to_string(),
+            description: "Browse the web".to_string(),
+            parameters: serde_json::json!({"type": "object", "properties": {}}),
+        };
+        let json = convert_tool_to_anthropic(&tool);
+        assert_eq!(json["name"], "browser");
+        assert_eq!(json["description"], "Browse the web");
+        assert!(json["input_schema"].is_object());
+    }
+
+    #[test]
+    fn sse_text_delta_event() {
+        let mut buffer = "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n".to_string();
+        let mut tool_blocks = Vec::new();
+
+        let result = extract_sse_event(&mut buffer, &mut tool_blocks);
+        assert!(result.is_some());
+        let chunk = result.unwrap().unwrap();
+        assert_eq!(chunk.delta.as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn sse_message_delta_stop() {
+        let mut buffer = "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":10,\"output_tokens\":20}}\n\n".to_string();
+        let mut tool_blocks = Vec::new();
+
+        let result = extract_sse_event(&mut buffer, &mut tool_blocks);
+        assert!(result.is_some());
+        let chunk = result.unwrap().unwrap();
+        assert_eq!(chunk.stop_reason.as_deref(), Some("end_turn"));
+    }
+
+    #[test]
+    fn sse_ping_event_skipped() {
+        let mut buffer = "event: ping\ndata: {}\n\nevent: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n".to_string();
+        let mut tool_blocks = Vec::new();
+
+        let result = extract_sse_event(&mut buffer, &mut tool_blocks);
+        assert!(result.is_some());
+        let chunk = result.unwrap().unwrap();
+        assert_eq!(chunk.delta.as_deref(), Some("Hi"));
+    }
+
+    #[test]
+    fn sse_error_event() {
+        let mut buffer = "event: error\ndata: {\"type\":\"overloaded_error\"}\n\n".to_string();
+        let mut tool_blocks = Vec::new();
+
+        let result = extract_sse_event(&mut buffer, &mut tool_blocks);
+        assert!(result.is_some());
+        assert!(result.unwrap().is_err());
+    }
+
+    #[test]
+    fn anthropic_provider_name() {
+        let provider = AnthropicProvider::new("key".to_string());
+        assert_eq!(provider.name(), "anthropic");
+    }
+
+    #[test]
+    fn anthropic_with_base_url() {
+        let provider = AnthropicProvider::new("key".to_string())
+            .with_base_url("https://custom.api.com".to_string());
+        assert_eq!(provider.base_url, "https://custom.api.com");
     }
 }

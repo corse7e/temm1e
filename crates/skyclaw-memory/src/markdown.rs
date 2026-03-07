@@ -317,3 +317,122 @@ fn str_to_entry_type(s: &str) -> Result<MemoryEntryType, SkyclawError> {
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn make_entry(id: &str, content: &str, et: MemoryEntryType) -> MemoryEntry {
+        MemoryEntry {
+            id: id.to_string(),
+            content: content.to_string(),
+            metadata: serde_json::json!({}),
+            timestamp: Utc::now(),
+            session_id: Some("test-session".to_string()),
+            entry_type: et,
+        }
+    }
+
+    #[tokio::test]
+    async fn store_and_get_conversation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mem = MarkdownMemory::new(tmp.path()).await.unwrap();
+
+        let entry = make_entry("md1", "Hello from markdown", MemoryEntryType::Conversation);
+        mem.store(entry).await.unwrap();
+
+        let fetched = mem.get("md1").await.unwrap();
+        assert!(fetched.is_some());
+        assert_eq!(fetched.unwrap().content, "Hello from markdown");
+    }
+
+    #[tokio::test]
+    async fn store_long_term_in_memory_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mem = MarkdownMemory::new(tmp.path()).await.unwrap();
+
+        let entry = make_entry("lt1", "Important fact", MemoryEntryType::LongTerm);
+        mem.store(entry).await.unwrap();
+
+        // Check the MEMORY.md file exists
+        let lt_path = tmp.path().join("MEMORY.md");
+        assert!(lt_path.exists());
+
+        let content = tokio::fs::read_to_string(&lt_path).await.unwrap();
+        assert!(content.contains("Important fact"));
+        assert!(content.contains("<!-- entry:lt1"));
+    }
+
+    #[tokio::test]
+    async fn delete_entry_from_markdown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mem = MarkdownMemory::new(tmp.path()).await.unwrap();
+
+        mem.store(make_entry("del1", "to delete", MemoryEntryType::Conversation)).await.unwrap();
+        mem.store(make_entry("keep1", "to keep", MemoryEntryType::Conversation)).await.unwrap();
+
+        mem.delete("del1").await.unwrap();
+
+        assert!(mem.get("del1").await.unwrap().is_none());
+        assert!(mem.get("keep1").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn list_sessions_from_markdown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mem = MarkdownMemory::new(tmp.path()).await.unwrap();
+
+        let mut e1 = make_entry("s1", "a", MemoryEntryType::Conversation);
+        e1.session_id = Some("session_a".to_string());
+        mem.store(e1).await.unwrap();
+
+        let mut e2 = make_entry("s2", "b", MemoryEntryType::Conversation);
+        e2.session_id = Some("session_b".to_string());
+        mem.store(e2).await.unwrap();
+
+        let sessions = mem.list_sessions().await.unwrap();
+        assert!(sessions.contains(&"session_a".to_string()));
+        assert!(sessions.contains(&"session_b".to_string()));
+    }
+
+    #[test]
+    fn entry_to_markdown_format() {
+        let entry = MemoryEntry {
+            id: "fmt1".to_string(),
+            content: "Test content".to_string(),
+            metadata: serde_json::json!({}),
+            timestamp: chrono::DateTime::parse_from_rfc3339("2025-01-15T10:30:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            session_id: Some("sess1".to_string()),
+            entry_type: MemoryEntryType::Conversation,
+        };
+
+        let md = MarkdownMemory::entry_to_markdown(&entry);
+        assert!(md.contains("<!-- entry:fmt1 session:sess1 type:conversation -->"));
+        assert!(md.contains("### 2025-01-15"));
+        assert!(md.contains("Test content"));
+    }
+
+    #[test]
+    fn parse_entries_roundtrip() {
+        let entry = MemoryEntry {
+            id: "rt1".to_string(),
+            content: "Roundtrip test".to_string(),
+            metadata: serde_json::json!({}),
+            timestamp: chrono::DateTime::parse_from_rfc3339("2025-06-01T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            session_id: Some("s1".to_string()),
+            entry_type: MemoryEntryType::DailyLog,
+        };
+
+        let md = MarkdownMemory::entry_to_markdown(&entry);
+        let parsed = MarkdownMemory::parse_entries(&md);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].id, "rt1");
+        assert_eq!(parsed[0].content, "Roundtrip test");
+        assert_eq!(parsed[0].session_id.as_deref(), Some("s1"));
+    }
+}

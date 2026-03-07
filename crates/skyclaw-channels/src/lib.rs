@@ -49,3 +49,35 @@ pub fn create_channel(
         other => Err(SkyclawError::Config(format!("Unknown channel: {other}"))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_cli_channel() {
+        let config = ChannelConfig {
+            enabled: true,
+            token: None,
+            allowlist: Vec::new(),
+            file_transfer: true,
+            max_file_size: None,
+        };
+        let channel = create_channel("cli", &config, "/tmp".into()).unwrap();
+        assert_eq!(channel.name(), "cli");
+        assert!(channel.is_allowed("anyone"));
+    }
+
+    #[test]
+    fn create_unknown_channel_fails() {
+        let config = ChannelConfig {
+            enabled: true,
+            token: None,
+            allowlist: Vec::new(),
+            file_transfer: false,
+            max_file_size: None,
+        };
+        let result = create_channel("smoke_signal", &config, "/tmp".into());
+        assert!(result.is_err());
+    }
+}

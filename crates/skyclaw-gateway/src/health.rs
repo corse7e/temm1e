@@ -60,3 +60,43 @@ pub async fn status_handler(
     };
     (StatusCode::OK, Json(resp))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn health_handler_returns_ok() {
+        let response = health_handler().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn health_response_serializes_correctly() {
+        let resp = HealthResponse {
+            status: "ok",
+            version: "0.1.0",
+            uptime_seconds: 42,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["version"], "0.1.0");
+        assert_eq!(json["uptime_seconds"], 42);
+    }
+
+    #[test]
+    fn status_response_serializes_correctly() {
+        let resp = StatusResponse {
+            status: "ok",
+            version: "0.1.0",
+            provider: "anthropic".to_string(),
+            channels: vec!["telegram".to_string(), "cli".to_string()],
+            tools: vec!["shell".to_string()],
+            memory_backend: "sqlite".to_string(),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["provider"], "anthropic");
+        assert_eq!(json["channels"].as_array().unwrap().len(), 2);
+        assert_eq!(json["memory_backend"], "sqlite");
+    }
+}

@@ -1,20 +1,18 @@
 [package]
-name = "skyclaw-agent"
+name = "skyclaw-test-utils"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Agent runtime for SkyClaw"
+description = "Test utilities and mocks for SkyClaw"
 
 [dependencies]
 skyclaw-core.workspace = true
-tokio.workspace = true
-futures.workspace = true
-tracing.workspace = true
+async-trait.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 uuid.workspace = true
-
-[dev-dependencies]
-skyclaw-test-utils.workspace = true
-tempfile = "3"
+tokio.workspace = true
+futures.workspace = true
+bytes.workspace = true

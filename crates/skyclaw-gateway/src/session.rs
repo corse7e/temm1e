@@ -89,3 +89,84 @@ impl Default for SessionManager {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn create_session_returns_new_session() {
+        let mgr = SessionManager::new();
+        let session = mgr.get_or_create_session("telegram", "chat1", "user1").await;
+        assert_eq!(session.channel, "telegram");
+        assert_eq!(session.chat_id, "chat1");
+        assert_eq!(session.user_id, "user1");
+        assert!(session.history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_existing_session_returns_same() {
+        let mgr = SessionManager::new();
+        let s1 = mgr.get_or_create_session("cli", "c1", "u1").await;
+        let s2 = mgr.get_or_create_session("cli", "c1", "u1").await;
+        assert_eq!(s1.session_id, s2.session_id);
+    }
+
+    #[tokio::test]
+    async fn different_users_get_different_sessions() {
+        let mgr = SessionManager::new();
+        let s1 = mgr.get_or_create_session("cli", "c1", "user_a").await;
+        let s2 = mgr.get_or_create_session("cli", "c1", "user_b").await;
+        assert_ne!(s1.session_id, s2.session_id);
+    }
+
+    #[tokio::test]
+    async fn session_count_tracks_active() {
+        let mgr = SessionManager::new();
+        assert_eq!(mgr.session_count().await, 0);
+
+        mgr.get_or_create_session("cli", "c1", "u1").await;
+        assert_eq!(mgr.session_count().await, 1);
+
+        mgr.get_or_create_session("tg", "c2", "u2").await;
+        assert_eq!(mgr.session_count().await, 2);
+
+        // Same session, no increase
+        mgr.get_or_create_session("cli", "c1", "u1").await;
+        assert_eq!(mgr.session_count().await, 2);
+    }
+
+    #[tokio::test]
+    async fn remove_session_decreases_count() {
+        let mgr = SessionManager::new();
+        mgr.get_or_create_session("cli", "c1", "u1").await;
+        assert_eq!(mgr.session_count().await, 1);
+
+        mgr.remove_session("cli", "c1", "u1").await;
+        assert_eq!(mgr.session_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn update_session_preserves_changes() {
+        let mgr = SessionManager::new();
+        let mut session = mgr.get_or_create_session("cli", "c1", "u1").await;
+
+        // Simulate adding history
+        session.history.push(skyclaw_core::types::message::ChatMessage {
+            role: skyclaw_core::types::message::Role::User,
+            content: skyclaw_core::types::message::MessageContent::Text("hello".to_string()),
+        });
+        mgr.update_session(session).await;
+
+        let restored = mgr.get_or_create_session("cli", "c1", "u1").await;
+        assert_eq!(restored.history.len(), 1);
+    }
+
+    #[test]
+    fn session_key_is_deterministic() {
+        let k1 = SessionManager::session_key("telegram", "123", "456");
+        let k2 = SessionManager::session_key("telegram", "123", "456");
+        assert_eq!(k1, k2);
+        assert_eq!(k1, "telegram:123:456");
+    }
+}

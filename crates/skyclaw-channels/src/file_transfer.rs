@@ -76,3 +76,92 @@ fn mime_from_extension(path: &Path) -> String {
         _ => "application/octet-stream".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mime_detection_known_extensions() {
+        assert_eq!(mime_from_extension(Path::new("file.txt")), "text/plain");
+        assert_eq!(mime_from_extension(Path::new("doc.pdf")), "application/pdf");
+        assert_eq!(mime_from_extension(Path::new("photo.png")), "image/png");
+        assert_eq!(mime_from_extension(Path::new("photo.jpg")), "image/jpeg");
+        assert_eq!(mime_from_extension(Path::new("photo.jpeg")), "image/jpeg");
+        assert_eq!(mime_from_extension(Path::new("code.rs")), "text/x-rust");
+        assert_eq!(mime_from_extension(Path::new("data.json")), "application/json");
+        assert_eq!(mime_from_extension(Path::new("config.yaml")), "application/yaml");
+        assert_eq!(mime_from_extension(Path::new("config.yml")), "application/yaml");
+    }
+
+    #[test]
+    fn mime_detection_unknown_extension() {
+        assert_eq!(mime_from_extension(Path::new("file.xyz")), "application/octet-stream");
+        assert_eq!(mime_from_extension(Path::new("noext")), "application/octet-stream");
+    }
+
+    #[tokio::test]
+    async fn save_received_file_sanitizes_path_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path();
+
+        // A malicious filename with path traversal
+        let file = ReceivedFile {
+            name: "../../../etc/passwd".to_string(),
+            mime_type: "text/plain".to_string(),
+            size: 4,
+            data: Bytes::from("test"),
+        };
+
+        let saved_path = save_received_file(&file, workspace).await.unwrap();
+
+        // The file should be saved inside the workspace, not at /etc/passwd
+        assert!(saved_path.starts_with(workspace));
+        // The filename should be just "passwd" (stripped of directory components)
+        assert_eq!(saved_path.file_name().unwrap().to_str().unwrap(), "passwd");
+    }
+
+    #[tokio::test]
+    async fn save_received_file_creates_workspace_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("new_dir").join("nested");
+
+        let file = ReceivedFile {
+            name: "test.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            size: 5,
+            data: Bytes::from("hello"),
+        };
+
+        let saved_path = save_received_file(&file, &workspace).await.unwrap();
+        assert!(saved_path.exists());
+
+        let content = tokio::fs::read_to_string(&saved_path).await.unwrap();
+        assert_eq!(content, "hello");
+    }
+
+    #[tokio::test]
+    async fn read_file_for_sending_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file_path = tmp.path().join("test.json");
+        tokio::fs::write(&file_path, r#"{"key": "value"}"#).await.unwrap();
+
+        let outbound = read_file_for_sending(&file_path).await.unwrap();
+        assert_eq!(outbound.name, "test.json");
+        assert_eq!(outbound.mime_type, "application/json");
+        assert!(outbound.caption.is_none());
+
+        match outbound.data {
+            FileData::Bytes(b) => {
+                assert_eq!(String::from_utf8_lossy(&b), r#"{"key": "value"}"#);
+            }
+            _ => panic!("expected Bytes"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_file_for_sending_nonexistent_fails() {
+        let result = read_file_for_sending(Path::new("/tmp/nonexistent_file_12345.txt")).await;
+        assert!(result.is_err());
+    }
+}

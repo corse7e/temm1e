@@ -306,3 +306,56 @@ impl Default for ObservabilityConfig {
 }
 
 fn default_log_level() -> String { "info".to_string() }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_serde_roundtrip() {
+        let config = SkyclawConfig {
+            skyclaw: SkyclawSection { mode: "cloud".to_string(), tenant_isolation: true },
+            gateway: GatewayConfig { host: "0.0.0.0".to_string(), port: 443, tls: true, tls_cert: Some("cert.pem".to_string()), tls_key: Some("key.pem".to_string()) },
+            provider: ProviderConfig { name: Some("anthropic".to_string()), api_key: Some("sk-test".to_string()), model: Some("claude-sonnet-4-20250514".to_string()), base_url: None },
+            memory: MemoryConfig::default(),
+            vault: VaultConfig::default(),
+            filestore: FileStoreConfig::default(),
+            security: SecurityConfig::default(),
+            heartbeat: HeartbeatConfig::default(),
+            cron: CronConfig::default(),
+            channel: HashMap::new(),
+            tools: ToolsConfig::default(),
+            tunnel: None,
+            observability: ObservabilityConfig::default(),
+        };
+
+        let toml_str = toml::to_string(&config).unwrap();
+        let restored: SkyclawConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(restored.skyclaw.mode, "cloud");
+        assert!(restored.skyclaw.tenant_isolation);
+        assert_eq!(restored.gateway.port, 443);
+        assert!(restored.gateway.tls);
+        assert_eq!(restored.provider.name.as_deref(), Some("anthropic"));
+    }
+
+    #[test]
+    fn defaults_are_sensible() {
+        let gw = GatewayConfig::default();
+        assert_eq!(gw.host, "127.0.0.1");
+        assert_eq!(gw.port, 8080);
+        assert!(!gw.tls);
+
+        let mem = MemoryConfig::default();
+        assert_eq!(mem.backend, "sqlite");
+
+        let sec = SecurityConfig::default();
+        assert_eq!(sec.sandbox, "mandatory");
+        assert!(sec.file_scanning);
+        assert!(sec.audit_log);
+
+        let tools = ToolsConfig::default();
+        assert!(tools.shell);
+        assert!(tools.browser);
+        assert!(tools.file);
+    }
+}

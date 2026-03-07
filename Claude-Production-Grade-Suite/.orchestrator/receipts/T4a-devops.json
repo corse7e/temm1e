@@ -1,0 +1,21 @@
+{
+  "task": "T4a",
+  "skill": "devops",
+  "status": "complete",
+  "artifacts": [
+    "Dockerfile",
+    "docker-compose.yml",
+    ".github/workflows/ci.yml",
+    ".dockerignore"
+  ],
+  "metrics": {
+    "dockerfiles": 1,
+    "compose_services": 2,
+    "ci_jobs": 5
+  },
+  "effort": {
+    "files_read": 6,
+    "files_written": 6,
+    "tool_calls": 15
+  }
+}

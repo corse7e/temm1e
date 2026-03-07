@@ -95,3 +95,144 @@ fn validate_sandbox(tool: &dyn Tool, session: &SessionContext) -> Result<(), Sky
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skyclaw_test_utils::{MockTool, make_session};
+    use skyclaw_core::{PathAccess, ToolDeclarations};
+
+    #[tokio::test]
+    async fn execute_tool_returns_output() {
+        let tool = MockTool::new("test_tool");
+        let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(tool)];
+        let session = make_session();
+
+        let result = execute_tool(
+            "test_tool",
+            serde_json::json!({}),
+            &tools,
+            &session,
+        ).await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().content, "mock output");
+    }
+
+    #[tokio::test]
+    async fn execute_unknown_tool_returns_error() {
+        let tools: Vec<Arc<dyn Tool>> = vec![];
+        let session = make_session();
+
+        let result = execute_tool(
+            "nonexistent",
+            serde_json::json!({}),
+            &tools,
+            &session,
+        ).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, SkyclawError::Tool(_)));
+    }
+
+    #[test]
+    fn sandbox_allows_workspace_relative_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().to_path_buf();
+
+        // Create a file inside workspace for canonicalization
+        let inner_dir = workspace.join("subdir");
+        std::fs::create_dir_all(&inner_dir).unwrap();
+
+        let tool = MockTool::new("file_tool")
+            .with_declarations(ToolDeclarations {
+                file_access: vec![PathAccess::Read("subdir".to_string())],
+                network_access: Vec::new(),
+                shell_access: false,
+            });
+
+        let session = SessionContext {
+            session_id: "test".to_string(),
+            channel: "cli".to_string(),
+            chat_id: "c".to_string(),
+            user_id: "u".to_string(),
+            history: Vec::new(),
+            workspace_path: workspace,
+        };
+
+        let result = validate_sandbox(&tool, &session);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn sandbox_rejects_path_outside_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let tool = MockTool::new("evil_tool")
+            .with_declarations(ToolDeclarations {
+                file_access: vec![PathAccess::Write("/etc/passwd".to_string())],
+                network_access: Vec::new(),
+                shell_access: false,
+            });
+
+        let session = SessionContext {
+            session_id: "test".to_string(),
+            channel: "cli".to_string(),
+            chat_id: "c".to_string(),
+            user_id: "u".to_string(),
+            history: Vec::new(),
+            workspace_path: workspace,
+        };
+
+        let result = validate_sandbox(&tool, &session);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), SkyclawError::SandboxViolation(_)));
+    }
+
+    #[test]
+    fn sandbox_rejects_path_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let tool = MockTool::new("traversal_tool")
+            .with_declarations(ToolDeclarations {
+                file_access: vec![PathAccess::Read("../../etc/shadow".to_string())],
+                network_access: Vec::new(),
+                shell_access: false,
+            });
+
+        let session = SessionContext {
+            session_id: "test".to_string(),
+            channel: "cli".to_string(),
+            chat_id: "c".to_string(),
+            user_id: "u".to_string(),
+            history: Vec::new(),
+            workspace_path: workspace,
+        };
+
+        let result = validate_sandbox(&tool, &session);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn sandbox_allows_no_file_access() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tool = MockTool::new("network_only");
+
+        let session = SessionContext {
+            session_id: "test".to_string(),
+            channel: "cli".to_string(),
+            chat_id: "c".to_string(),
+            user_id: "u".to_string(),
+            history: Vec::new(),
+            workspace_path: tmp.path().to_path_buf(),
+        };
+
+        let result = validate_sandbox(&tool, &session);
+        assert!(result.is_ok());
+    }
+}
