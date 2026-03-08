@@ -190,6 +190,34 @@ cargo build --release                                      # Release build
 - Chrome/Chromium (for browser tool)
 - A Telegram bot token
 
+## Release Timeline
+
+```
+2026-03-08 v1.1.0 ●━━━ Provider expansion — 6 LLM providers, hot-reload, channel docs, path fixes
+ │
+2026-03-08 v1.0.0 ●━━━ AGENTIC CORE — 35 features, 20 autonomy modules, vision support, 905 tests
+ │
+2026-03-08 v0.9.0 ●━━━ Production hardening — Dockerfile, systemd, CI/CD, multi-user support
+ │
+2026-03-08 v0.8.0 ●━━━ Telegram-native onboarding — API key validation, headless browser, self-config
+ │
+2026-03-08 v0.7.0 ●━━━ Per-chat dispatcher — browser tool, stop commands, pending message injection
+ │
+2026-03-08 v0.6.0 ●━━━ Agent autonomy — send_message tool, heartbeat system, configurable tool rounds
+ │
+2026-03-08 v0.5.0 ●━━━ Agent tools — shell, file ops, file transfer, context management
+ │
+2026-03-08 v0.4.0 ●━━━ SUSTAIN — docs, runbooks, skills registry, incident response
+ │
+2026-03-08 v0.3.0 ●━━━ SHIP — security remediation (2C/6H/2M fixed), IaC, release workflow
+ │
+2026-03-08 v0.2.0 ●━━━ HARDEN — 105 new tests, security audit, STRIDE threat model, deep code review
+ │
+2026-03-08 v0.1.0 ●━━━ Wave A — gateway, providers, memory, vault, channels, full type system
+ │
+2026-03-08 v0.0.1 ●━━━ Architecture scaffold — 13 crates, 12 traits, research documentation
+```
+
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=nagisanzenin/skyclaw&type=Date)](https://star-history.com/#nagisanzenin/skyclaw&Date)
