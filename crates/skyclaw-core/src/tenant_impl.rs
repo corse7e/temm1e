@@ -203,7 +203,7 @@ impl TenantManager {
 
     /// Return the current call count for a tenant in the current day.
     pub fn current_call_count(&self, tenant_id: &TenantId) -> u32 {
-        let limits = self.rate_limits.read().expect("rate_limits lock poisoned");
+        let limits = self.rate_limits.read().unwrap_or_else(|e| e.into_inner());
         let today = current_day_epoch();
         limits
             .get(&tenant_id.0)

@@ -116,10 +116,13 @@ pub async fn execute_tools_parallel(
             let mut group_results = Vec::new();
             for (idx, call) in calls {
                 // Acquire a semaphore permit to respect max_concurrent
-                let _permit = semaphore
-                    .acquire()
-                    .await
-                    .expect("semaphore should not be closed");
+                let _permit = match semaphore.acquire().await {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        warn!("Tool semaphore closed, returning partial results");
+                        return group_results;
+                    }
+                };
 
                 let output = execute_tool(&call.name, call.arguments, &tools, &session).await;
 

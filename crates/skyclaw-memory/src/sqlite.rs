@@ -4,7 +4,12 @@ use async_trait::async_trait;
 use skyclaw_core::error::SkyclawError;
 use skyclaw_core::{Memory, MemoryEntry, MemoryEntryType, SearchOpts};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
-use tracing::{debug, info};
+use std::time::Duration;
+use tokio::time::{sleep, timeout};
+use tracing::{debug, info, warn};
+
+/// Maximum time allowed for any single database operation.
+const DB_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A memory backend backed by SQLite via sqlx.
 pub struct SqliteMemory {
@@ -65,21 +70,61 @@ impl Memory for SqliteMemory {
         let timestamp_str = entry.timestamp.to_rfc3339();
         let entry_type_str = entry_type_to_str(&entry.entry_type);
 
-        sqlx::query(
-            r#"
-            INSERT OR REPLACE INTO memory_entries (id, content, metadata, timestamp, session_id, entry_type)
-            VALUES (?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&entry.id)
-        .bind(&entry.content)
-        .bind(&metadata_str)
-        .bind(&timestamp_str)
-        .bind(&entry.session_id)
-        .bind(entry_type_str)
-        .execute(&self.pool)
+        const MAX_RETRIES: u32 = 3;
+        const RETRY_DELAY: Duration = Duration::from_millis(100);
+
+        timeout(DB_TIMEOUT, async {
+            let mut last_err = None;
+            for attempt in 1..=MAX_RETRIES {
+                match sqlx::query(
+                    r#"
+                    INSERT OR REPLACE INTO memory_entries (id, content, metadata, timestamp, session_id, entry_type)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    "#,
+                )
+                .bind(&entry.id)
+                .bind(&entry.content)
+                .bind(&metadata_str)
+                .bind(&timestamp_str)
+                .bind(&entry.session_id)
+                .bind(entry_type_str)
+                .execute(&self.pool)
+                .await
+                {
+                    Ok(_) => {
+                        last_err = None;
+                        break;
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        if attempt < MAX_RETRIES
+                            && (msg.contains("database is locked") || msg.contains("SQLITE_BUSY"))
+                        {
+                            warn!(
+                                attempt = attempt,
+                                max = MAX_RETRIES,
+                                id = %entry.id,
+                                "SQLITE_BUSY on store, retrying after {RETRY_DELAY:?}"
+                            );
+                            last_err = Some(e);
+                            sleep(RETRY_DELAY).await;
+                        } else {
+                            return Err(SkyclawError::Memory(format!(
+                                "Failed to store entry: {e}"
+                            )));
+                        }
+                    }
+                }
+            }
+            if let Some(e) = last_err {
+                return Err(SkyclawError::Memory(format!("Failed to store entry: {e}")));
+            }
+            Ok(())
+        })
         .await
-        .map_err(|e| SkyclawError::Memory(format!("Failed to store entry: {e}")))?;
+        .map_err(|_| {
+            SkyclawError::Memory("Database operation timed out after 5 seconds".into())
+        })??;
 
         debug!(id = %entry.id, "Stored memory entry");
         Ok(())
@@ -128,22 +173,28 @@ impl Memory for SqliteMemory {
             q = q.bind(v);
         }
 
-        let rows: Vec<MemoryRow> = q
-            .fetch_all(&self.pool)
+        let rows: Vec<MemoryRow> = timeout(DB_TIMEOUT, q.fetch_all(&self.pool))
             .await
+            .map_err(|_| {
+                SkyclawError::Memory("Database operation timed out after 5 seconds".into())
+            })?
             .map_err(|e| SkyclawError::Memory(format!("Search failed: {e}")))?;
 
         rows.into_iter().map(row_to_entry).collect()
     }
 
     async fn get(&self, id: &str) -> Result<Option<MemoryEntry>, SkyclawError> {
-        let row = sqlx::query_as::<_, MemoryRow>(
-            "SELECT id, content, metadata, timestamp, session_id, entry_type \
-             FROM memory_entries WHERE id = ?",
+        let row = timeout(
+            DB_TIMEOUT,
+            sqlx::query_as::<_, MemoryRow>(
+                "SELECT id, content, metadata, timestamp, session_id, entry_type \
+                 FROM memory_entries WHERE id = ?",
+            )
+            .bind(id)
+            .fetch_optional(&self.pool),
         )
-        .bind(id)
-        .fetch_optional(&self.pool)
         .await
+        .map_err(|_| SkyclawError::Memory("Database operation timed out after 5 seconds".into()))?
         .map_err(|e| SkyclawError::Memory(format!("Failed to get entry: {e}")))?;
 
         match row {
@@ -153,23 +204,31 @@ impl Memory for SqliteMemory {
     }
 
     async fn delete(&self, id: &str) -> Result<(), SkyclawError> {
-        sqlx::query("DELETE FROM memory_entries WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| SkyclawError::Memory(format!("Failed to delete entry: {e}")))?;
+        timeout(
+            DB_TIMEOUT,
+            sqlx::query("DELETE FROM memory_entries WHERE id = ?")
+                .bind(id)
+                .execute(&self.pool),
+        )
+        .await
+        .map_err(|_| SkyclawError::Memory("Database operation timed out after 5 seconds".into()))?
+        .map_err(|e| SkyclawError::Memory(format!("Failed to delete entry: {e}")))?;
 
         debug!(id = %id, "Deleted memory entry");
         Ok(())
     }
 
     async fn list_sessions(&self) -> Result<Vec<String>, SkyclawError> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT DISTINCT session_id FROM memory_entries \
-             WHERE session_id IS NOT NULL ORDER BY session_id",
+        let rows: Vec<(String,)> = timeout(
+            DB_TIMEOUT,
+            sqlx::query_as(
+                "SELECT DISTINCT session_id FROM memory_entries \
+                 WHERE session_id IS NOT NULL ORDER BY session_id",
+            )
+            .fetch_all(&self.pool),
         )
-        .fetch_all(&self.pool)
         .await
+        .map_err(|_| SkyclawError::Memory("Database operation timed out after 5 seconds".into()))?
         .map_err(|e| SkyclawError::Memory(format!("Failed to list sessions: {e}")))?;
 
         Ok(rows.into_iter().map(|r| r.0).collect())
@@ -180,15 +239,19 @@ impl Memory for SqliteMemory {
         session_id: &str,
         limit: usize,
     ) -> Result<Vec<MemoryEntry>, SkyclawError> {
-        let rows: Vec<MemoryRow> = sqlx::query_as::<_, MemoryRow>(
-            "SELECT id, content, metadata, timestamp, session_id, entry_type \
-             FROM memory_entries WHERE session_id = ? \
-             ORDER BY timestamp ASC LIMIT ?",
+        let rows: Vec<MemoryRow> = timeout(
+            DB_TIMEOUT,
+            sqlx::query_as::<_, MemoryRow>(
+                "SELECT id, content, metadata, timestamp, session_id, entry_type \
+                 FROM memory_entries WHERE session_id = ? \
+                 ORDER BY timestamp ASC LIMIT ?",
+            )
+            .bind(session_id)
+            .bind(limit as i64)
+            .fetch_all(&self.pool),
         )
-        .bind(session_id)
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
         .await
+        .map_err(|_| SkyclawError::Memory("Database operation timed out after 5 seconds".into()))?
         .map_err(|e| SkyclawError::Memory(format!("Failed to get session history: {e}")))?;
 
         rows.into_iter().map(row_to_entry).collect()
@@ -534,5 +597,37 @@ mod tests {
         };
         let results = mem.search("hello", opts).await.unwrap();
         assert_eq!(results.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn concurrent_stores_with_retry() {
+        use std::sync::Arc;
+
+        let mem = Arc::new(SqliteMemory::new("sqlite::memory:").await.unwrap());
+
+        // Spawn many concurrent store tasks to exercise the retry path.
+        let mut handles = Vec::new();
+        for i in 0..20 {
+            let mem = Arc::clone(&mem);
+            handles.push(tokio::spawn(async move {
+                mem.store(make_entry(
+                    &format!("concurrent_{i}"),
+                    &format!("content {i}"),
+                    Some("concurrent_session"),
+                ))
+                .await
+            }));
+        }
+
+        for handle in handles {
+            handle.await.unwrap().unwrap();
+        }
+
+        // All 20 entries should be stored successfully.
+        let history = mem
+            .get_session_history("concurrent_session", 100)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 20);
     }
 }

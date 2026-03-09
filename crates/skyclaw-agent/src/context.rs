@@ -665,7 +665,7 @@ mod tests {
         let req = build_context(&session, &memory, &tools, "model", None, 200, 2_000).await;
 
         // The most recent messages should always be present
-        let last_msg = req.messages.last().unwrap();
+        let last_msg = req.messages.last().expect("messages should not be empty");
         match &last_msg.content {
             MessageContent::Text(t) => assert!(t.contains("Reply 19")),
             _ => panic!("Expected text message"),
@@ -769,7 +769,10 @@ mod tests {
         let digest = build_chat_digest(&refs);
         assert!(digest.is_some());
 
-        let text = match &digest.unwrap().content {
+        let text = match &digest
+            .expect("digest should be Some for multi-message input")
+            .content
+        {
             MessageContent::Text(t) => t.clone(),
             _ => panic!("Expected text"),
         };
@@ -812,7 +815,10 @@ mod tests {
         let digest = build_chat_digest(&refs);
         assert!(digest.is_some());
 
-        let text = match &digest.unwrap().content {
+        let text = match &digest
+            .expect("digest should be Some for multi-message input")
+            .content
+        {
             MessageContent::Text(t) => t.clone(),
             _ => panic!("Expected text"),
         };
@@ -851,7 +857,8 @@ mod tests {
         };
 
         let refs: Vec<&ChatMessage> = vec![&m1, &m2, &m3];
-        let digest = build_chat_digest(&refs).unwrap();
+        let digest =
+            build_chat_digest(&refs).expect("digest should be Some for multi-message input");
 
         let text = match &digest.content {
             MessageContent::Text(t) => t.clone(),

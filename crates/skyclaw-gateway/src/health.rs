@@ -1,9 +1,19 @@
 //! Health endpoint handler — returns JSON health/status information.
 
+use std::sync::OnceLock;
+use std::time::Instant;
+
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::Serialize;
+
+static START_TIME: OnceLock<Instant> = OnceLock::new();
+
+/// Call this once at process startup to initialize the uptime clock.
+pub fn init_start_time() {
+    START_TIME.get_or_init(Instant::now);
+}
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -24,10 +34,11 @@ pub struct StatusResponse {
 
 /// Handler for GET /health
 pub async fn health_handler() -> impl IntoResponse {
+    let uptime = START_TIME.get().map(|t| t.elapsed().as_secs()).unwrap_or(0);
     let resp = HealthResponse {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
-        uptime_seconds: 0, // placeholder; real uptime would come from shared state
+        uptime_seconds: uptime,
     };
     (StatusCode::OK, Json(resp))
 }

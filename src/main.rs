@@ -1033,6 +1033,29 @@ fn is_stop_command(text: &str) -> bool {
     false
 }
 
+/// Retry `send_message` up to 3 times with exponential backoff.
+async fn send_with_retry(
+    sender: &dyn skyclaw_core::Channel,
+    reply: skyclaw_core::types::message::OutboundMessage,
+) {
+    let mut attempt = 0u32;
+    let msg = reply;
+    loop {
+        attempt += 1;
+        match sender.send_message(msg.clone()).await {
+            Ok(_) => return,
+            Err(e) => {
+                if attempt >= 3 {
+                    tracing::error!(error = %e, attempt, "Failed to send reply after 3 attempts — message lost");
+                    return;
+                }
+                tracing::warn!(error = %e, attempt, "Failed to send reply, retrying");
+                tokio::time::sleep(std::time::Duration::from_millis(500 * (1 << attempt))).await;
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -1045,6 +1068,9 @@ async fn main() -> Result<()> {
         )
         .json()
         .init();
+
+    // Initialize health endpoint uptime clock
+    skyclaw_gateway::health::init_start_time();
 
     // ── Global panic hook — route panics through tracing ─────
     // Without this, panics only write to stderr and are invisible in structured logs.
@@ -1106,7 +1132,9 @@ async fn main() -> Result<()> {
                 let data_dir = dirs::home_dir()
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
                     .join(".skyclaw");
-                std::fs::create_dir_all(&data_dir).ok();
+                if let Err(e) = std::fs::create_dir_all(&data_dir) {
+                    tracing::warn!(error = %e, path = %data_dir.display(), "Failed to create directory");
+                }
                 format!("sqlite:{}/memory.db?mode=rwc", data_dir.display())
             });
             let memory: Arc<dyn skyclaw_core::Memory> = Arc::from(
@@ -1220,16 +1248,19 @@ async fn main() -> Result<()> {
             let (msg_tx, mut msg_rx) =
                 tokio::sync::mpsc::channel::<skyclaw_core::types::message::InboundMessage>(32);
 
+            // Track spawned task handles for graceful shutdown
+            let mut task_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
             // Wire Telegram messages into the unified channel
             if let Some(mut tg_rx) = tg_rx {
                 let tx = msg_tx.clone();
-                tokio::spawn(async move {
+                task_handles.push(tokio::spawn(async move {
                     while let Some(msg) = tg_rx.recv().await {
                         if tx.send(msg).await.is_err() {
                             break;
                         }
                     }
-                });
+                }));
             }
 
             // ── Workspace ──────────────────────────────────────
@@ -1237,7 +1268,9 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
                 .join(".skyclaw")
                 .join("workspace");
-            std::fs::create_dir_all(&workspace_path).ok();
+            if let Err(e) = std::fs::create_dir_all(&workspace_path) {
+                tracing::warn!(error = %e, path = %workspace_path.display(), "Failed to create directory");
+            }
 
             // ── Heartbeat ──────────────────────────────────────
             if config.heartbeat.enabled {
@@ -1252,9 +1285,9 @@ async fn main() -> Result<()> {
                     heartbeat_chat_id,
                 );
                 let hb_tx = msg_tx.clone();
-                tokio::spawn(async move {
+                task_handles.push(tokio::spawn(async move {
                     runner.run(hb_tx).await;
-                });
+                }));
                 tracing::info!(
                     interval = %config.heartbeat.interval,
                     checklist = %config.heartbeat.checklist,
@@ -1290,7 +1323,8 @@ async fn main() -> Result<()> {
                 let chat_slots: Arc<Mutex<HashMap<String, ChatSlot>>> =
                     Arc::new(Mutex::new(HashMap::new()));
 
-                tokio::spawn(async move {
+                let msg_tx_redispatch = msg_tx.clone();
+                task_handles.push(tokio::spawn(async move {
                     while let Some(inbound) = msg_rx.recv().await {
                         let chat_id = inbound.chat_id.clone();
                         let is_heartbeat_msg = inbound.channel == "heartbeat";
@@ -1410,6 +1444,11 @@ async fn main() -> Result<()> {
                                     };
 
                                 while let Some(mut msg) = chat_rx.recv().await {
+                                    // Snapshot for outer panic handler (msg is borrowed by async block)
+                                    let panic_chat_id = msg.chat_id.clone();
+                                    let panic_msg_id = msg.id.clone();
+
+                                    let outer_catch_result = AssertUnwindSafe(async {
                                     let is_hb = msg.channel == "heartbeat";
                                     is_heartbeat_clone.store(is_hb, Ordering::Relaxed);
                                     interrupt_clone.store(false, Ordering::Relaxed);
@@ -1443,9 +1482,9 @@ async fn main() -> Result<()> {
                                             reply_to: Some(msg.id.clone()),
                                             parse_mode: None,
                                         };
-                                        let _ = sender.send_message(reply).await;
+                                        send_with_retry(&*sender, reply).await;
                                         is_heartbeat_clone.store(false, Ordering::Relaxed);
-                                        continue;
+                                        return;
                                     }
 
                                     // /addkey unsafe — raw key paste mode
@@ -1460,9 +1499,9 @@ async fn main() -> Result<()> {
                                             reply_to: Some(msg.id.clone()),
                                             parse_mode: None,
                                         };
-                                        let _ = sender.send_message(reply).await;
+                                        send_with_retry(&*sender, reply).await;
                                         is_heartbeat_clone.store(false, Ordering::Relaxed);
-                                        continue;
+                                        return;
                                     }
 
                                     // /keys — list configured providers
@@ -1474,9 +1513,9 @@ async fn main() -> Result<()> {
                                             reply_to: Some(msg.id.clone()),
                                             parse_mode: None,
                                         };
-                                        let _ = sender.send_message(reply).await;
+                                        send_with_retry(&*sender, reply).await;
                                         is_heartbeat_clone.store(false, Ordering::Relaxed);
-                                        continue;
+                                        return;
                                     }
 
                                     // /removekey <provider>
@@ -1489,7 +1528,7 @@ async fn main() -> Result<()> {
                                             reply_to: Some(msg.id.clone()),
                                             parse_mode: None,
                                         };
-                                        let _ = sender.send_message(reply).await;
+                                        send_with_retry(&*sender, reply).await;
 
                                         // If provider was removed, check if agent needs to go offline
                                         if !provider_arg.is_empty() && load_active_provider_keys().is_none() {
@@ -1498,7 +1537,7 @@ async fn main() -> Result<()> {
                                         }
 
                                         is_heartbeat_clone.store(false, Ordering::Relaxed);
-                                        continue;
+                                        return;
                                     }
 
                                     // /usage — show usage summary
@@ -1528,9 +1567,9 @@ async fn main() -> Result<()> {
                                             reply_to: Some(msg.id.clone()),
                                             parse_mode: None,
                                         };
-                                        let _ = sender.send_message(reply).await;
+                                        send_with_retry(&*sender, reply).await;
                                         is_heartbeat_clone.store(false, Ordering::Relaxed);
-                                        continue;
+                                        return;
                                     }
 
                                     // enc:v1: — encrypted blob from OTK flow
@@ -1577,7 +1616,7 @@ async fn main() -> Result<()> {
                                                                 reply_to: Some(msg.id.clone()),
                                                                 parse_mode: None,
                                                             };
-                                                            let _ = sender.send_message(reply).await;
+                                                            send_with_retry(&*sender, reply).await;
                                                             tracing::info!(provider = %cred.provider, "OTK key validated — agent online");
                                                         }
                                                         Err(err) => {
@@ -1590,7 +1629,7 @@ async fn main() -> Result<()> {
                                                                 reply_to: Some(msg.id.clone()),
                                                                 parse_mode: None,
                                                             };
-                                                            let _ = sender.send_message(reply).await;
+                                                            send_with_retry(&*sender, reply).await;
                                                         }
                                                     }
                                                 } else {
@@ -1602,7 +1641,7 @@ async fn main() -> Result<()> {
                                                         reply_to: Some(msg.id.clone()),
                                                         parse_mode: None,
                                                     };
-                                                    let _ = sender.send_message(reply).await;
+                                                    send_with_retry(&*sender, reply).await;
                                                 }
                                             }
                                             Err(err) => {
@@ -1612,14 +1651,14 @@ async fn main() -> Result<()> {
                                                     reply_to: Some(msg.id.clone()),
                                                     parse_mode: None,
                                                 };
-                                                let _ = sender.send_message(reply).await;
+                                                send_with_retry(&*sender, reply).await;
                                             }
                                         }
                                         is_heartbeat_clone.store(false, Ordering::Relaxed);
                                         if let Ok(mut pq) = pending_for_worker.lock() {
                                             pq.remove(&worker_chat_id);
                                         }
-                                        continue;
+                                        return;
                                     }
 
                                     // Pending raw key paste (from /addkey unsafe)
@@ -1692,7 +1731,7 @@ async fn main() -> Result<()> {
                                                                 reply_to: Some(msg.id.clone()),
                                                                 parse_mode: None,
                                                             };
-                                                            let _ = sender.send_message(reply).await;
+                                                            send_with_retry(&*sender, reply).await;
                                                             tracing::info!(
                                                                 provider = %name,
                                                                 key_count = key_count,
@@ -1712,7 +1751,7 @@ async fn main() -> Result<()> {
                                                         reply_to: Some(msg.id.clone()),
                                                         parse_mode: None,
                                                     };
-                                                    let _ = sender.send_message(reply).await;
+                                                    send_with_retry(&*sender, reply).await;
                                                     tracing::warn!(
                                                         provider = %cred.provider,
                                                         error = %err,
@@ -1727,7 +1766,7 @@ async fn main() -> Result<()> {
                                             if let Ok(mut pq) = pending_for_worker.lock() {
                                                 pq.remove(&worker_chat_id);
                                             }
-                                            continue;
+                                            return;
                                         }
 
                                         // ── Normal mode: process with agent ────
@@ -1788,9 +1827,7 @@ async fn main() -> Result<()> {
                                         match process_result {
                                             Ok(Ok((mut reply, turn_usage))) => {
                                                 reply.text = censor_secrets(&reply.text);
-                                                if let Err(e) = sender.send_message(reply).await {
-                                                    tracing::error!(error = %e, "Failed to send reply");
-                                                }
+                                                send_with_retry(&*sender, reply).await;
 
                                                 // Record usage
                                                 let record = skyclaw_core::UsageRecord {
@@ -1820,7 +1857,7 @@ async fn main() -> Result<()> {
                                                                 reply_to: None,
                                                                 parse_mode: None,
                                                             };
-                                                            let _ = sender.send_message(usage_msg).await;
+                                                            send_with_retry(&*sender, usage_msg).await;
                                                         }
                                                     }
                                                 }
@@ -1833,7 +1870,7 @@ async fn main() -> Result<()> {
                                                     reply_to: Some(msg.id.clone()),
                                                     parse_mode: None,
                                                 };
-                                                let _ = sender.send_message(error_reply).await;
+                                                send_with_retry(&*sender, error_reply).await;
                                             }
                                             Err(panic_info) => {
                                                 // ── Panic recovered — worker stays alive ────
@@ -1855,7 +1892,7 @@ async fn main() -> Result<()> {
                                                     reply_to: Some(msg.id.clone()),
                                                     parse_mode: None,
                                                 };
-                                                let _ = sender.send_message(error_reply).await;
+                                                send_with_retry(&*sender, error_reply).await;
                                                 // Session history may be corrupted after a panic.
                                                 // Trim the last entry if it was partially added.
                                                 if persistent_history.len() < session.history.len() {
@@ -2018,7 +2055,7 @@ async fn main() -> Result<()> {
                                                                 reply_to: Some(msg.id.clone()),
                                                                 parse_mode: None,
                                                             };
-                                                            let _ = sender.send_message(reply).await;
+                                                            send_with_retry(&*sender, reply).await;
                                                             tracing::info!(provider = %provider_name, model = %model, "API key validated — agent online");
                                                         }
                                                         Err(e) => {
@@ -2032,7 +2069,7 @@ async fn main() -> Result<()> {
                                                                 reply_to: Some(msg.id.clone()),
                                                                 parse_mode: None,
                                                             };
-                                                            let _ = sender.send_message(reply).await;
+                                                            send_with_retry(&*sender, reply).await;
                                                             tracing::warn!(provider = %provider_name, error = %e, "API key validation failed");
                                                         }
                                                     }
@@ -2044,7 +2081,7 @@ async fn main() -> Result<()> {
                                                         reply_to: Some(msg.id.clone()),
                                                         parse_mode: None,
                                                     };
-                                                    let _ = sender.send_message(reply).await;
+                                                    send_with_retry(&*sender, reply).await;
                                                 }
                                             }
                                         } else {
@@ -2061,7 +2098,7 @@ async fn main() -> Result<()> {
                                                 reply_to: Some(msg.id.clone()),
                                                 parse_mode: None,
                                             };
-                                            let _ = sender.send_message(reply).await;
+                                            send_with_retry(&*sender, reply).await;
 
                                             // Send format reference as separate message for easy copy-paste
                                             let ref_msg = skyclaw_core::types::message::OutboundMessage {
@@ -2070,7 +2107,7 @@ async fn main() -> Result<()> {
                                                 reply_to: None,
                                                 parse_mode: None,
                                             };
-                                            let _ = sender.send_message(ref_msg).await;
+                                            send_with_retry(&*sender, ref_msg).await;
                                         }
                                     }
 
@@ -2079,6 +2116,44 @@ async fn main() -> Result<()> {
                                     interrupt_clone.store(false, Ordering::Relaxed);
                                     if let Ok(mut pq) = pending_for_worker.lock() {
                                         pq.remove(&worker_chat_id);
+                                    }
+                                    }).catch_unwind().await;
+
+                                    // ── Outer panic safety net ─────────────────
+                                    // If ANYTHING in the loop body panicked
+                                    // (command handling, key detection, session
+                                    // setup, etc.), recover here so the worker
+                                    // loop survives.  The inner catch_unwind on
+                                    // process_message provides more specific
+                                    // recovery with usage tracking; this outer
+                                    // one is a last-resort safety net.
+                                    if let Err(panic_info) = outer_catch_result {
+                                        let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                                            s.to_string()
+                                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                                            s.clone()
+                                        } else {
+                                            "unknown panic".to_string()
+                                        };
+                                        tracing::error!(
+                                            panic = %panic_msg,
+                                            chat_id = %panic_chat_id,
+                                            "Worker panic caught in outer safety net — recovering"
+                                        );
+                                        // Best-effort notification to the user
+                                        let error_reply = skyclaw_core::types::message::OutboundMessage {
+                                            chat_id: panic_chat_id.clone(),
+                                            text: "An internal error occurred. Please try again.".to_string(),
+                                            reply_to: Some(panic_msg_id.clone()),
+                                            parse_mode: None,
+                                        };
+                                        let _ = sender.send_message(error_reply).await;
+                                        // Ensure cleanup in case the panic skipped it
+                                        is_heartbeat_clone.store(false, Ordering::Relaxed);
+                                        interrupt_clone.store(false, Ordering::Relaxed);
+                                        if let Ok(mut pq) = pending_for_worker.lock() {
+                                            pq.remove(&worker_chat_id);
+                                        }
                                     }
                                 }
                             });
@@ -2092,34 +2167,43 @@ async fn main() -> Result<()> {
                         if !is_heartbeat_msg {
                             let tx = slot.tx.clone();
                             drop(slots); // release Mutex guard before await
+                            let inbound_backup = inbound.clone();
                             if let Err(e) = tx.send(inbound).await {
                                 tracing::error!(
                                     chat_id = %chat_id,
                                     error = %e,
-                                    "Chat worker dead — removing slot for respawn on next message"
+                                    "Chat worker dead — removing slot and re-dispatching"
                                 );
                                 let mut slots = chat_slots.lock().await;
                                 slots.remove(&chat_id);
+                                drop(slots); // release lock before re-dispatch
+                                // Re-send through the unified channel so the
+                                // dispatcher loop creates a fresh worker for
+                                // this chat_id — zero messages lost.
+                                if let Err(e2) = msg_tx_redispatch.send(inbound_backup).await {
+                                    tracing::error!(
+                                        chat_id = %chat_id,
+                                        error = %e2,
+                                        "Failed to re-dispatch message after worker death"
+                                    );
+                                }
                             }
                         }
                     }
-                });
+                }));
             }
 
             // ── Start gateway + block ──────────────────────────
-            let is_online = agent_state.read().await.is_some();
-
             println!("SkyClaw gateway starting...");
             println!("  Mode: {}", cli.mode);
 
-            if is_online {
-                let agent = agent_state.read().await.as_ref().unwrap().clone();
+            if let Some(agent) = agent_state.read().await.as_ref().cloned() {
                 let gate = skyclaw_gateway::SkyGate::new(channels, agent, config.gateway.clone());
-                tokio::spawn(async move {
+                task_handles.push(tokio::spawn(async move {
                     if let Err(e) = gate.start().await {
                         tracing::error!(error = %e, "Gateway error");
                     }
-                });
+                }));
                 println!("  Status: Online");
                 println!(
                     "  Gateway: http://{}:{}",
@@ -2133,9 +2217,23 @@ async fn main() -> Result<()> {
                 println!("  Status: Onboarding — send your API key via Telegram");
             }
 
-            // Block until Ctrl+C
+            // Block until Ctrl+C, then drain gracefully
             tokio::signal::ctrl_c().await?;
-            println!("\nSkyClaw shutting down...");
+            println!("\nSkyClaw shutting down gracefully...");
+
+            // Drop the inbound message sender so the dispatcher loop exits
+            // when its receiver sees the channel closed.
+            drop(msg_tx);
+
+            // Wait for spawned tasks with a timeout
+            let drain_timeout = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                futures::future::join_all(task_handles),
+            );
+            match drain_timeout.await {
+                Ok(_) => println!("All tasks drained cleanly."),
+                Err(_) => println!("Drain timeout — forcing exit."),
+            }
         }
         Commands::Chat => {
             println!("SkyClaw interactive chat");
@@ -2169,7 +2267,9 @@ async fn main() -> Result<()> {
                 let data_dir = dirs::home_dir()
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
                     .join(".skyclaw");
-                std::fs::create_dir_all(&data_dir).ok();
+                if let Err(e) = std::fs::create_dir_all(&data_dir) {
+                    tracing::warn!(error = %e, path = %data_dir.display(), "Failed to create directory");
+                }
                 format!("sqlite:{}/memory.db?mode=rwc", data_dir.display())
             });
             let memory: Arc<dyn skyclaw_core::Memory> = Arc::from(
@@ -2181,7 +2281,9 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
                 .join(".skyclaw")
                 .join("workspace");
-            std::fs::create_dir_all(&workspace).ok();
+            if let Err(e) = std::fs::create_dir_all(&workspace) {
+                tracing::warn!(error = %e, path = %workspace.display(), "Failed to create directory");
+            }
             let mut cli_channel = skyclaw_channels::CliChannel::new(workspace.clone());
             let cli_rx = cli_channel.take_receiver();
             cli_channel.start().await?;
@@ -2282,7 +2384,10 @@ async fn main() -> Result<()> {
             println!("---\n");
 
             // ── Message loop ───────────────────────────────────
-            let mut rx = cli_rx.expect("CLI channel receiver must be available");
+            let Some(mut rx) = cli_rx else {
+                eprintln!("CLI channel receiver unavailable");
+                return Ok(());
+            };
             // ── Restore CLI conversation history from memory backend ──
             let cli_history_key = "chat_history:cli".to_string();
             let mut history: Vec<skyclaw_core::types::message::ChatMessage> =
@@ -3142,7 +3247,7 @@ mod tests {
              model = \"claude-sonnet-4-6\"\n",
             test_key
         );
-        std::fs::write(&path, &creds_content).unwrap();
+        std::fs::write(&path, &creds_content).expect("test: write credential file");
 
         let text = format!("Your API key is {} and it works great!", test_key);
         let censored = censor_secrets(&text);
@@ -3158,7 +3263,7 @@ mod tests {
 
         // Restore
         match backup {
-            Some(content) => std::fs::write(&path, content).unwrap(),
+            Some(content) => std::fs::write(&path, content).expect("test: restore credential file"),
             None => {
                 std::fs::remove_file(&path).ok();
             }

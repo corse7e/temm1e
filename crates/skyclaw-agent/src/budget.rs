@@ -193,7 +193,7 @@ impl BudgetTracker {
     pub fn new(max_spend_usd: f64) -> Self {
         Self {
             cumulative_micro_cents: AtomicU64::new(0),
-            max_micro_cents: (max_spend_usd * MICRO_CENTS_PER_USD) as u64,
+            max_micro_cents: (max_spend_usd.max(0.0) * MICRO_CENTS_PER_USD) as u64,
             total_input_tokens: AtomicU64::new(0),
             total_output_tokens: AtomicU64::new(0),
         }
@@ -201,7 +201,7 @@ impl BudgetTracker {
 
     /// Record usage from a completed API call. Returns the cost of this call in USD.
     pub fn record_usage(&self, input_tokens: u32, output_tokens: u32, cost_usd: f64) -> f64 {
-        let micro_cents = (cost_usd * MICRO_CENTS_PER_USD) as u64;
+        let micro_cents = (cost_usd.max(0.0) * MICRO_CENTS_PER_USD) as u64;
         self.cumulative_micro_cents
             .fetch_add(micro_cents, Ordering::Relaxed);
         self.total_input_tokens

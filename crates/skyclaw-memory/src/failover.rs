@@ -275,7 +275,9 @@ impl Memory for ResilientMemory {
                 let should_repair = self.record_failure(&e).await;
                 if should_repair {
                     warn!("Failure threshold reached — attempting automatic repair");
-                    let _ = self.attempt_repair().await;
+                    if let Err(e) = self.attempt_repair().await {
+                        tracing::warn!(error = %e, "Automatic repair attempt failed");
+                    }
                 }
                 // The entry is already in the cache, so we can return Ok.
                 debug!(
@@ -305,7 +307,9 @@ impl Memory for ResilientMemory {
                 let should_repair = self.record_failure(&e).await;
                 if should_repair {
                     warn!("Failure threshold reached — attempting automatic repair");
-                    let _ = self.attempt_repair().await;
+                    if let Err(e) = self.attempt_repair().await {
+                        tracing::warn!(error = %e, "Automatic repair attempt failed");
+                    }
                 }
                 // Return from cache (already checked, so None).
                 debug!(
@@ -347,7 +351,9 @@ impl Memory for ResilientMemory {
                 let should_repair = self.record_failure(&e).await;
                 if should_repair {
                     warn!("Failure threshold reached — attempting automatic repair");
-                    let _ = self.attempt_repair().await;
+                    if let Err(e) = self.attempt_repair().await {
+                        tracing::warn!(error = %e, "Automatic repair attempt failed");
+                    }
                 }
                 // Fall back to searching the cache.
                 let state = self.state.read().await;
@@ -395,7 +401,9 @@ impl Memory for ResilientMemory {
                 let should_repair = self.record_failure(&e).await;
                 if should_repair {
                     warn!("Failure threshold reached — attempting automatic repair");
-                    let _ = self.attempt_repair().await;
+                    if let Err(e) = self.attempt_repair().await {
+                        tracing::warn!(error = %e, "Automatic repair attempt failed");
+                    }
                 }
                 debug!(
                     id = %id,
@@ -417,7 +425,9 @@ impl Memory for ResilientMemory {
                 let should_repair = self.record_failure(&e).await;
                 if should_repair {
                     warn!("Failure threshold reached — attempting automatic repair");
-                    let _ = self.attempt_repair().await;
+                    if let Err(e) = self.attempt_repair().await {
+                        tracing::warn!(error = %e, "Automatic repair attempt failed");
+                    }
                 }
                 // Fall back to sessions derivable from cache.
                 let state = self.state.read().await;
@@ -453,7 +463,9 @@ impl Memory for ResilientMemory {
                 let should_repair = self.record_failure(&e).await;
                 if should_repair {
                     warn!("Failure threshold reached — attempting automatic repair");
-                    let _ = self.attempt_repair().await;
+                    if let Err(e) = self.attempt_repair().await {
+                        tracing::warn!(error = %e, "Automatic repair attempt failed");
+                    }
                 }
                 // Fall back to cache.
                 let state = self.state.read().await;

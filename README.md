@@ -10,14 +10,14 @@
   <a href="https://github.com/nagisanzenin/skyclaw/stargazers"><img src="https://img.shields.io/github/stars/nagisanzenin/skyclaw?style=flat&color=gold&logo=github" alt="GitHub Stars"></a>
   <a href="https://discord.gg/3ux2c5xz"><img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.5.1-blue.svg" alt="Version">
-  <img src="https://img.shields.io/badge/tests-1095-green.svg" alt="1095 tests">
+  <img src="https://img.shields.io/badge/version-1.6.0-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/tests-1130-green.svg" alt="1130 tests">
   <img src="https://img.shields.io/badge/providers-6-red.svg" alt="6 providers">
 </p>
 
 # SkyClaw
 
-Hyper-performance (Rust) & self-learning claw that lives indefinitely in Cloud. Learns from every task, remembers across sessions. 44K lines, 1095 tests, zero warnings.
+Hyper-performance Rust agent runtime with extreme resilience and continuous self-learning. Deploys once, stays up forever. Learns from every task, remembers across sessions, self-heals through failures. 46K lines, 1130 tests, zero warnings, zero panic paths.
 
 ## What It Does
 
@@ -48,7 +48,7 @@ ORDER ─→ THINK ─→ ACTION ─→ VERIFY ─┐
 
 | Category | Modules |
 |----------|---------|
-| **Resilience** | Circuit breaker, per-message panic recovery, dead worker respawn, channel reconnection, graceful shutdown, conversation persistence |
+| **Resilience** | Zero panic paths in production code, circuit breaker with exponential backoff, per-message panic recovery, dead worker respawn with message re-dispatch, send retry (3 attempts), channel reconnection, 5s DB timeout, graceful SIGTERM drain, lock poison recovery, conversation persistence |
 | **Intelligence** | Task decomposition, self-correction, DONE criteria, cross-task learning |
 | **Self-Healing** | Watchdog, state recovery, health-aware heartbeat, memory failover |
 | **Efficiency** | Output compression, system prompt optimization, tiered model routing, history pruning |
@@ -59,8 +59,8 @@ ORDER ─→ THINK ─→ ACTION ─→ VERIFY ─┐
 
 | Metric | Value |
 |--------|-------|
-| **Lines of Rust** | 44,074 across 101 source files |
-| **Tests** | 1,095 passing, 0 failures |
+| **Lines of Rust** | 46,332 across 104 source files |
+| **Tests** | 1,130 passing, 0 failures |
 | **Clippy warnings** | 0 (CI gate: `-D warnings`) |
 | **Workspace crates** | 13 + 1 binary |
 | **Implemented features** | 49 across 9 phases |
@@ -231,7 +231,7 @@ skyclaw version            Show version info
 ```bash
 cargo check --workspace                                    # Quick compilation check
 cargo build --workspace                                    # Debug build
-cargo test --workspace                                     # Run all 1095 tests
+cargo test --workspace                                     # Run all 1130 tests
 cargo clippy --workspace --all-targets --all-features -- -D warnings  # Lint (0 warnings)
 cargo fmt --all                                            # Format
 cargo build --release                                      # Release build
@@ -246,6 +246,8 @@ cargo build --release                                      # Release build
 ## Release Timeline
 
 ```
+2026-03-10  v1.6.0  ●━━━ Extreme resilience — zero panic paths, 26-finding hardening audit (22 fixed), send retry (3 attempts), dead worker respawn with message re-dispatch, SQLite 5s timeout, full catch_unwind coverage, lock poison recovery across all crates, graceful SIGTERM drain, 1130 tests
+                    │
 2026-03-10  v1.5.1  ●━━━ Crash resilience — 4-layer panic recovery, UTF-8 safety (6 fixes), conversation persistence, budget default fix, per-turn usage tracking
                     │
 2026-03-09  v1.5.0  ●━━━ OTK secure key setup — AES-256-GCM encrypted onboarding, key_manage tool, secret output filter, SetupLinkGenerator trait, 1095 tests

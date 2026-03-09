@@ -1,13 +1,18 @@
+use std::sync::LazyLock;
+
 use regex::Regex;
+
+static ENV_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\{([^}]+)\}").expect("invalid env var regex"));
 
 /// Expand environment variables in a string (${VAR_NAME} syntax)
 pub fn expand_env_vars(input: &str) -> String {
-    let re = Regex::new(r"\$\{([^}]+)\}").expect("invalid regex");
-    re.replace_all(input, |caps: &regex::Captures| {
-        let var_name = &caps[1];
-        std::env::var(var_name).unwrap_or_default()
-    })
-    .to_string()
+    ENV_RE
+        .replace_all(input, |caps: &regex::Captures| {
+            let var_name = &caps[1];
+            std::env::var(var_name).unwrap_or_default()
+        })
+        .to_string()
 }
 
 #[cfg(test)]

@@ -47,19 +47,19 @@ impl MetricsCollector {
 
     /// Read the current value of a counter.
     pub fn counter_value(&self, key: &str) -> Option<u64> {
-        let map = self.counters.read().expect("counters lock poisoned");
+        let map = self.counters.read().unwrap_or_else(|e| e.into_inner());
         map.get(key).map(|v| v.load(Ordering::Relaxed))
     }
 
     /// Read the current value of a gauge.
     pub fn gauge_value(&self, key: &str) -> Option<i64> {
-        let map = self.gauges.read().expect("gauges lock poisoned");
+        let map = self.gauges.read().unwrap_or_else(|e| e.into_inner());
         map.get(key).map(|v| v.load(Ordering::Relaxed))
     }
 
     /// Read a snapshot of histogram observations.
     pub fn histogram_values(&self, key: &str) -> Option<Vec<f64>> {
-        let map = self.histograms.read().expect("histograms lock poisoned");
+        let map = self.histograms.read().unwrap_or_else(|e| e.into_inner());
         map.get(key).cloned()
     }
 
@@ -68,7 +68,10 @@ impl MetricsCollector {
     /// Returns `None` if the histogram does not exist or has no observations.
     /// `percentile` must be in `[0.0, 100.0]`.
     pub fn histogram_percentile(&self, key: &str, percentile: f64) -> Option<f64> {
-        let map = self.histograms.read().expect("histograms lock poisoned");
+        if !(0.0..=100.0).contains(&percentile) {
+            return None;
+        }
+        let map = self.histograms.read().unwrap_or_else(|e| e.into_inner());
         let values = map.get(key)?;
         if values.is_empty() {
             return None;

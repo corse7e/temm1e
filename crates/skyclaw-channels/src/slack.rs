@@ -166,8 +166,21 @@ fn persist_allowlist(
     allowlist: &Arc<RwLock<Vec<String>>>,
     admin: &Arc<RwLock<Option<String>>>,
 ) -> Result<(), SkyclawError> {
-    let list = allowlist.read().unwrap().clone();
-    let admin_id = admin.read().unwrap().clone().unwrap_or_default();
+    let list = allowlist
+        .read()
+        .unwrap_or_else(|e| {
+            tracing::error!("RwLock poisoned, recovering");
+            e.into_inner()
+        })
+        .clone();
+    let admin_id = admin
+        .read()
+        .unwrap_or_else(|e| {
+            tracing::error!("RwLock poisoned, recovering");
+            e.into_inner()
+        })
+        .clone()
+        .unwrap_or_default();
     save_allowlist_file(&AllowlistFile {
         admin: admin_id,
         users: list,
@@ -208,8 +221,20 @@ pub struct SlackChannel {
 impl std::fmt::Debug for SlackChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SlackChannel")
-            .field("allowlist", &*self.allowlist.read().unwrap())
-            .field("bot_user_id", &*self.bot_user_id.read().unwrap())
+            .field(
+                "allowlist",
+                &*self.allowlist.read().unwrap_or_else(|e| {
+                    tracing::error!("RwLock poisoned, recovering");
+                    e.into_inner()
+                }),
+            )
+            .field(
+                "bot_user_id",
+                &*self.bot_user_id.read().unwrap_or_else(|e| {
+                    tracing::error!("RwLock poisoned, recovering");
+                    e.into_inner()
+                }),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -271,7 +296,10 @@ impl SlackChannel {
     /// An empty allowlist means no one is whitelisted yet (auto-whitelist
     /// happens in the polling loop when the first user writes).
     fn check_allowed(&self, user_id: &str) -> bool {
-        let list = self.allowlist.read().unwrap();
+        let list = self.allowlist.read().unwrap_or_else(|e| {
+            tracing::error!("RwLock poisoned, recovering");
+            e.into_inner()
+        });
         if list.is_empty() {
             return false; // No one whitelisted yet
         }
@@ -309,7 +337,10 @@ impl Channel for SlackChannel {
 
         if let Some(data) = &auth_result.data {
             if let Some(ref uid) = data.user_id {
-                let mut guard = self.bot_user_id.write().unwrap();
+                let mut guard = self.bot_user_id.write().unwrap_or_else(|e| {
+                    tracing::error!("RwLock poisoned, recovering");
+                    e.into_inner()
+                });
                 *guard = Some(uid.clone());
                 tracing::info!(bot_user_id = %uid, "Slack bot authenticated");
             }
@@ -638,7 +669,10 @@ async fn poll_slack_messages(
 
                 // Skip our own messages.
                 {
-                    let our_id = bot_user_id.read().unwrap();
+                    let our_id = bot_user_id.read().unwrap_or_else(|e| {
+                        tracing::error!("RwLock poisoned, recovering");
+                        e.into_inner()
+                    });
                     if our_id.as_deref() == Some(&user_id) {
                         update_latest_ts(&mut latest_ts, &convo.id, &msg.ts);
                         continue;
@@ -647,10 +681,16 @@ async fn poll_slack_messages(
 
                 // Auto-whitelist first user & set as admin.
                 {
-                    let mut list = allowlist.write().unwrap();
+                    let mut list = allowlist.write().unwrap_or_else(|e| {
+                        tracing::error!("RwLock poisoned, recovering");
+                        e.into_inner()
+                    });
                     if list.is_empty() {
                         list.push(user_id.clone());
-                        let mut adm = admin.write().unwrap();
+                        let mut adm = admin.write().unwrap_or_else(|e| {
+                            tracing::error!("RwLock poisoned, recovering");
+                            e.into_inner()
+                        });
                         *adm = Some(user_id.clone());
                         tracing::info!(
                             user_id = %user_id,
@@ -669,7 +709,10 @@ async fn poll_slack_messages(
 
                 // Reject non-allowlisted users.
                 {
-                    let list = allowlist.read().unwrap();
+                    let list = allowlist.read().unwrap_or_else(|e| {
+                        tracing::error!("RwLock poisoned, recovering");
+                        e.into_inner()
+                    });
                     if !list.iter().any(|a| a == &user_id) {
                         drop(list);
                         tracing::warn!(

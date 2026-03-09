@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 /// Maximum recovery timeout (5 minutes).
 const MAX_RECOVERY_TIMEOUT: Duration = Duration::from_secs(300);
@@ -82,11 +82,17 @@ impl CircuitBreaker {
             CircuitState::Closed => true,
             CircuitState::Open => {
                 let timeout = {
-                    let t = self.current_recovery_timeout.lock().unwrap();
+                    let t = self.current_recovery_timeout.lock().unwrap_or_else(|e| {
+                        error!("Mutex poisoned in circuit breaker, recovering");
+                        e.into_inner()
+                    });
                     *t
                 };
                 let should_try = {
-                    let opened = self.opened_at.lock().unwrap();
+                    let opened = self.opened_at.lock().unwrap_or_else(|e| {
+                        error!("Mutex poisoned in circuit breaker, recovering");
+                        e.into_inner()
+                    });
                     match *opened {
                         Some(at) => at.elapsed() >= timeout,
                         None => true,
@@ -117,7 +123,10 @@ impl CircuitBreaker {
 
         // Reset recovery timeout to base
         {
-            let mut t = self.current_recovery_timeout.lock().unwrap();
+            let mut t = self.current_recovery_timeout.lock().unwrap_or_else(|e| {
+                error!("Mutex poisoned in circuit breaker, recovering");
+                e.into_inner()
+            });
             *t = self.base_recovery_timeout;
         }
 
@@ -139,11 +148,17 @@ impl CircuitBreaker {
                 if failures >= self.failure_threshold {
                     self.state.store(CircuitState::Open as u8, Ordering::SeqCst);
                     {
-                        let mut opened = self.opened_at.lock().unwrap();
+                        let mut opened = self.opened_at.lock().unwrap_or_else(|e| {
+                            error!("Mutex poisoned in circuit breaker, recovering");
+                            e.into_inner()
+                        });
                         *opened = Some(Instant::now());
                     }
                     let timeout = {
-                        let t = self.current_recovery_timeout.lock().unwrap();
+                        let t = self.current_recovery_timeout.lock().unwrap_or_else(|e| {
+                            error!("Mutex poisoned in circuit breaker, recovering");
+                            e.into_inner()
+                        });
                         *t
                     };
                     warn!(
@@ -159,11 +174,17 @@ impl CircuitBreaker {
                 // Test request failed — reopen with doubled timeout
                 self.state.store(CircuitState::Open as u8, Ordering::SeqCst);
                 {
-                    let mut opened = self.opened_at.lock().unwrap();
+                    let mut opened = self.opened_at.lock().unwrap_or_else(|e| {
+                        error!("Mutex poisoned in circuit breaker, recovering");
+                        e.into_inner()
+                    });
                     *opened = Some(Instant::now());
                 }
                 let new_timeout = {
-                    let mut t = self.current_recovery_timeout.lock().unwrap();
+                    let mut t = self.current_recovery_timeout.lock().unwrap_or_else(|e| {
+                        error!("Mutex poisoned in circuit breaker, recovering");
+                        e.into_inner()
+                    });
                     *t = (*t * 2).min(MAX_RECOVERY_TIMEOUT);
                     *t
                 };
@@ -298,7 +319,10 @@ mod tests {
 
         // Check that the recovery timeout has doubled
         let current_timeout = {
-            let t = cb.current_recovery_timeout.lock().unwrap();
+            let t = cb.current_recovery_timeout.lock().unwrap_or_else(|e| {
+                tracing::error!("Mutex poisoned in circuit breaker, recovering");
+                e.into_inner()
+            });
             *t
         };
         assert_eq!(current_timeout, base_timeout * 2);

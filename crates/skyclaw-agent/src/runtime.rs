@@ -419,9 +419,9 @@ impl AgentRuntime {
             );
 
             // Accumulate per-turn metrics
-            turn_api_calls += 1;
-            turn_input_tokens += response.usage.input_tokens;
-            turn_output_tokens += response.usage.output_tokens;
+            turn_api_calls = turn_api_calls.saturating_add(1);
+            turn_input_tokens = turn_input_tokens.saturating_add(response.usage.input_tokens);
+            turn_output_tokens = turn_output_tokens.saturating_add(response.usage.output_tokens);
             turn_cost_usd += call_cost;
 
             // Separate text content from tool-use content
@@ -480,7 +480,7 @@ impl AgentRuntime {
                         entry_type: skyclaw_core::MemoryEntryType::LongTerm,
                     };
                     if let Err(e) = self.memory.store(entry).await {
-                        debug!(error = %e, "Failed to persist task learning");
+                        warn!(error = %e, "Failed to persist task learning");
                     } else {
                         debug!(
                             task_type = %l.task_type,
@@ -496,7 +496,7 @@ impl AgentRuntime {
                         .update_status(tid, crate::task_queue::TaskStatus::Completed)
                         .await
                     {
-                        debug!(error = %e, "Failed to mark task completed");
+                        warn!(error = %e, "Failed to mark task completed");
                     }
                 }
 
@@ -529,7 +529,7 @@ impl AgentRuntime {
             let mut tool_result_parts: Vec<ContentPart> = Vec::new();
 
             for (tool_use_id, tool_name, arguments) in &tool_uses {
-                turn_tools_used += 1;
+                turn_tools_used = turn_tools_used.saturating_add(1);
                 info!(tool = %tool_name, id = %tool_use_id, "Executing tool call");
 
                 let result = execute_tool(tool_name, arguments.clone(), &self.tools, session).await;
@@ -642,7 +642,7 @@ impl AgentRuntime {
             if let (Some(ref tq), Some(ref tid)) = (&self.task_queue, &task_id) {
                 if let Ok(checkpoint_json) = serde_json::to_string(&session.history) {
                     if let Err(e) = tq.checkpoint(tid, &checkpoint_json).await {
-                        debug!(error = %e, "Failed to checkpoint task — continuing");
+                        warn!(error = %e, "Failed to checkpoint task — continuing");
                     }
                 }
             }

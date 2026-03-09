@@ -50,8 +50,7 @@ impl SessionManager {
         // Fast path: read lock
         {
             let sessions = self.sessions.read().await;
-            if sessions.contains_key(&key) {
-                let session = sessions.get(&key).cloned().unwrap();
+            if let Some(session) = sessions.get(&key).cloned() {
                 drop(sessions);
                 self.touch_access_order(&key).await;
                 return session;

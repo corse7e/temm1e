@@ -22,7 +22,10 @@ pub struct AnthropicProvider {
 impl AnthropicProvider {
     pub fn new(api_key: String) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             keys: vec![api_key],
             key_index: AtomicUsize::new(0),
             base_url: "https://api.anthropic.com".to_string(),
@@ -43,12 +46,18 @@ impl AnthropicProvider {
 
     /// Get the current API key via round-robin rotation.
     fn current_key(&self) -> &str {
+        if self.keys.is_empty() {
+            return "";
+        }
         let idx = self.key_index.load(Ordering::Relaxed) % self.keys.len();
         &self.keys[idx]
     }
 
     /// Advance to the next key (called on rate limit).
     fn rotate_key(&self) {
+        if self.keys.is_empty() {
+            return;
+        }
         let old = self.key_index.fetch_add(1, Ordering::Relaxed);
         let new_idx = (old + 1) % self.keys.len();
         if self.keys.len() > 1 {

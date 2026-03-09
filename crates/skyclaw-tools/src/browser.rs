@@ -134,6 +134,10 @@ pub struct BrowserTool {
     idle_timeout_secs: i64,
     /// Shutdown flag — signals the watchdog task to exit.
     shutdown: Arc<AtomicBool>,
+    /// Handle to the idle watchdog task — aborted on shutdown.
+    watchdog_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Handle to the CDP handler task — aborted when browser is closed.
+    cdp_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl Default for BrowserTool {
@@ -155,13 +159,16 @@ impl BrowserTool {
         let last_used = Arc::new(AtomicI64::new(0));
         let shutdown = Arc::new(AtomicBool::new(false));
         let idle_timeout = timeout_secs as i64;
+        let cdp_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> =
+            Arc::new(Mutex::new(None));
 
-        // Spawn idle auto-close watchdog
-        {
+        // Spawn idle auto-close watchdog — store handle for cleanup on drop.
+        let watchdog_handle = {
             let browser = browser.clone();
             let page = page.clone();
             let last_used = last_used.clone();
             let shutdown = shutdown.clone();
+            let cdp_handle = cdp_handle.clone();
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -180,12 +187,16 @@ impl BrowserTool {
                             tracing::info!("Browser idle for {}s — auto-closing", now - lu);
                             *p = None;
                             *b = None;
+                            // Abort the CDP handler so it doesn't linger.
+                            if let Some(handle) = cdp_handle.lock().await.take() {
+                                handle.abort();
+                            }
                             last_used.store(0, Ordering::Relaxed);
                         }
                     }
                 }
-            });
-        }
+            })
+        };
 
         Self {
             browser,
@@ -193,12 +204,18 @@ impl BrowserTool {
             last_used,
             idle_timeout_secs: idle_timeout,
             shutdown,
+            watchdog_handle: Mutex::new(Some(watchdog_handle)),
+            cdp_handle,
         }
     }
 
-    /// Signal the watchdog to stop on drop.
-    fn signal_shutdown(&self) {
+    /// Signal the watchdog to stop and abort background task handles.
+    fn signal_shutdown(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
+        // Abort the watchdog task immediately instead of waiting for the next 30s tick.
+        if let Some(handle) = self.watchdog_handle.get_mut().take() {
+            handle.abort();
+        }
     }
 
     /// Close the browser and free resources.
@@ -208,6 +225,10 @@ impl BrowserTool {
         if browser_guard.is_some() {
             *page_guard = None;
             *browser_guard = None;
+            // Abort the CDP handler task so it doesn't linger after the browser exits.
+            if let Some(handle) = self.cdp_handle.lock().await.take() {
+                handle.abort();
+            }
             self.last_used.store(0, Ordering::Relaxed);
             tracing::info!("Browser closed by agent");
             "Browser closed.".to_string()
@@ -230,6 +251,10 @@ impl BrowserTool {
                     tracing::warn!("Browser connection lost — relaunching");
                     *page_guard = None;
                     *browser_guard = None;
+                    // Abort the stale CDP handler from the dead browser.
+                    if let Some(handle) = self.cdp_handle.lock().await.take() {
+                        handle.abort();
+                    }
                 }
             }
         }
@@ -262,7 +287,8 @@ impl BrowserTool {
         })?;
 
         // Spawn the CDP handler — this MUST keep running for the browser to work.
-        tokio::spawn(async move {
+        // Store the handle so we can abort it when the browser is closed.
+        let cdp_handle = tokio::spawn(async move {
             loop {
                 match handler.next().await {
                     Some(Ok(_)) => {}
@@ -276,6 +302,7 @@ impl BrowserTool {
                 }
             }
         });
+        *self.cdp_handle.lock().await = Some(cdp_handle);
 
         // Give the browser a moment to fully initialize
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;

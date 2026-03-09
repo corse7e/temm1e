@@ -46,7 +46,17 @@ fn allowlist_path() -> Option<std::path::PathBuf> {
 fn load_allowlist_file() -> Option<AllowlistFile> {
     let path = allowlist_path()?;
     let content = std::fs::read_to_string(&path).ok()?;
-    toml::from_str(&content).ok()
+    match toml::from_str(&content) {
+        Ok(parsed) => Some(parsed),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "Failed to parse Discord allowlist file, ignoring"
+            );
+            None
+        }
+    }
 }
 
 /// Save the Discord allowlist to disk. Creates `~/.skyclaw/` if needed.
@@ -74,8 +84,20 @@ fn persist_allowlist(
     allowlist: &Arc<RwLock<Vec<String>>>,
     admin: &Arc<RwLock<Option<String>>>,
 ) -> Result<(), SkyclawError> {
-    let list = allowlist.read().unwrap().clone();
-    let admin_id = admin.read().unwrap().clone().unwrap_or_default();
+    let list = match allowlist.read() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => {
+            tracing::error!("Discord allowlist RwLock poisoned during persist, recovering");
+            poisoned.into_inner().clone()
+        }
+    };
+    let admin_id = match admin.read() {
+        Ok(guard) => guard.clone().unwrap_or_default(),
+        Err(poisoned) => {
+            tracing::error!("Discord admin RwLock poisoned during persist, recovering");
+            poisoned.into_inner().clone().unwrap_or_default()
+        }
+    };
     save_allowlist_file(&AllowlistFile {
         admin: admin_id,
         users: list,
@@ -115,10 +137,14 @@ pub struct DiscordChannel {
 
 impl std::fmt::Debug for DiscordChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let allowlist_display: Vec<String> = match self.allowlist.read() {
+            Ok(guard) => guard.clone(),
+            Err(_) => vec!["<lock poisoned>".to_string()],
+        };
         f.debug_struct("DiscordChannel")
             .field("respond_to_dms", &self.respond_to_dms)
             .field("respond_to_mentions", &self.respond_to_mentions)
-            .field("allowlist", &*self.allowlist.read().unwrap())
+            .field("allowlist", &allowlist_display)
             .finish_non_exhaustive()
     }
 }
@@ -178,7 +204,13 @@ impl DiscordChannel {
     /// An empty allowlist means no one is whitelisted yet (auto-whitelist
     /// happens in the event handler when the first user writes).
     fn check_allowed(&self, user_id: &str) -> bool {
-        let list = self.allowlist.read().unwrap();
+        let list = match self.allowlist.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::error!("Discord allowlist RwLock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
         if list.is_empty() {
             return false; // No one whitelisted yet
         }
@@ -276,7 +308,13 @@ impl Channel for DiscordChannel {
 
     async fn send_message(&self, msg: OutboundMessage) -> Result<(), SkyclawError> {
         let http = {
-            let guard = self.http.read().unwrap();
+            let guard = match self.http.read() {
+                Ok(g) => g,
+                Err(poisoned) => {
+                    tracing::error!("Discord HTTP RwLock poisoned in send_message, recovering");
+                    poisoned.into_inner()
+                }
+            };
             guard
                 .clone()
                 .ok_or_else(|| SkyclawError::Channel("Discord client not connected yet".into()))?
@@ -322,7 +360,13 @@ impl Channel for DiscordChannel {
 
     async fn delete_message(&self, chat_id: &str, message_id: &str) -> Result<(), SkyclawError> {
         let http = {
-            let guard = self.http.read().unwrap();
+            let guard = match self.http.read() {
+                Ok(g) => g,
+                Err(poisoned) => {
+                    tracing::error!("Discord HTTP RwLock poisoned in delete_message, recovering");
+                    poisoned.into_inner()
+                }
+            };
             guard
                 .clone()
                 .ok_or_else(|| SkyclawError::Channel("Discord client not connected yet".into()))?
@@ -362,7 +406,13 @@ impl Channel for DiscordChannel {
 impl FileTransfer for DiscordChannel {
     async fn receive_file(&self, msg: &InboundMessage) -> Result<Vec<ReceivedFile>, SkyclawError> {
         let http = {
-            let guard = self.http.read().unwrap();
+            let guard = match self.http.read() {
+                Ok(g) => g,
+                Err(poisoned) => {
+                    tracing::error!("Discord HTTP RwLock poisoned in receive_file, recovering");
+                    poisoned.into_inner()
+                }
+            };
             guard
                 .clone()
                 .ok_or_else(|| SkyclawError::Channel("Discord client not connected yet".into()))?
@@ -374,7 +424,14 @@ impl FileTransfer for DiscordChannel {
             // The file_id for Discord attachments is the download URL.
             let url = &att.file_id;
 
-            let response = reqwest::get(url).await.map_err(|e| {
+            // Use a timeout to prevent hanging on slow/unresponsive CDN downloads.
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .map_err(|e| {
+                    SkyclawError::FileTransfer(format!("Failed to build HTTP client: {e}"))
+                })?;
+            let response = client.get(url).send().await.map_err(|e| {
                 SkyclawError::FileTransfer(format!("Failed to download Discord attachment: {e}"))
             })?;
 
@@ -408,7 +465,13 @@ impl FileTransfer for DiscordChannel {
 
     async fn send_file(&self, chat_id: &str, file: OutboundFile) -> Result<(), SkyclawError> {
         let http = {
-            let guard = self.http.read().unwrap();
+            let guard = match self.http.read() {
+                Ok(g) => g,
+                Err(poisoned) => {
+                    tracing::error!("Discord HTTP RwLock poisoned in send_file, recovering");
+                    poisoned.into_inner()
+                }
+            };
             guard
                 .clone()
                 .ok_or_else(|| SkyclawError::Channel("Discord client not connected yet".into()))?
@@ -422,7 +485,14 @@ impl FileTransfer for DiscordChannel {
         let data = match &file.data {
             FileData::Bytes(b) => b.to_vec(),
             FileData::Url(url) => {
-                let response = reqwest::get(url).await.map_err(|e| {
+                // Use a timeout to prevent hanging on slow/unresponsive downloads.
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(120))
+                    .build()
+                    .map_err(|e| {
+                        SkyclawError::FileTransfer(format!("Failed to build HTTP client: {e}"))
+                    })?;
+                let response = client.get(url).send().await.map_err(|e| {
                     SkyclawError::FileTransfer(format!("Failed to download file from URL: {e}"))
                 })?;
                 response
@@ -492,7 +562,13 @@ impl EventHandler for DiscordHandler {
             "Discord bot connected"
         );
         // Store the HTTP client so DiscordChannel can use it for sending.
-        let mut guard = self.http_holder.write().unwrap();
+        let mut guard = match self.http_holder.write() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                tracing::error!("Discord HTTP holder RwLock poisoned in ready(), recovering");
+                poisoned.into_inner()
+            }
+        };
         *guard = Some(ctx.http.clone());
     }
 
@@ -530,10 +606,26 @@ impl EventHandler for DiscordHandler {
 
         // Auto-whitelist first user & set as admin
         {
-            let mut list = self.allowlist.write().unwrap();
+            let mut list = match self.allowlist.write() {
+                Ok(g) => g,
+                Err(poisoned) => {
+                    tracing::error!(
+                        "Discord allowlist RwLock poisoned in auto-whitelist, recovering"
+                    );
+                    poisoned.into_inner()
+                }
+            };
             if list.is_empty() {
                 list.push(user_id.clone());
-                let mut adm = self.admin.write().unwrap();
+                let mut adm = match self.admin.write() {
+                    Ok(g) => g,
+                    Err(poisoned) => {
+                        tracing::error!(
+                            "Discord admin RwLock poisoned in auto-whitelist, recovering"
+                        );
+                        poisoned.into_inner()
+                    }
+                };
                 *adm = Some(user_id.clone());
                 tracing::info!(
                     user_id = %user_id,
@@ -553,7 +645,15 @@ impl EventHandler for DiscordHandler {
 
         // Reject non-allowlisted users
         {
-            let list = self.allowlist.read().unwrap();
+            let list = match self.allowlist.read() {
+                Ok(g) => g,
+                Err(poisoned) => {
+                    tracing::error!(
+                        "Discord allowlist RwLock poisoned in access check, recovering"
+                    );
+                    poisoned.into_inner()
+                }
+            };
             if !list.iter().any(|a| a == &user_id) {
                 drop(list);
                 tracing::warn!(
@@ -576,25 +676,52 @@ impl EventHandler for DiscordHandler {
                 || trimmed == "/users"
             {
                 let is_admin = {
-                    let adm = self.admin.read().unwrap();
+                    let adm = match self.admin.read() {
+                        Ok(g) => g,
+                        Err(poisoned) => {
+                            tracing::error!(
+                                "Discord admin RwLock poisoned in admin check, recovering"
+                            );
+                            poisoned.into_inner()
+                        }
+                    };
                     adm.as_deref() == Some(&user_id)
                 };
 
                 if !is_admin {
-                    let _ = channel_id
+                    if let Err(e) = channel_id
                         .send_message(
                             &ctx.http,
                             CreateMessage::new().content("Only the admin can use this command."),
                         )
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(error = %e, "Failed to send admin-only reply to Discord");
+                    }
                     return;
                 }
 
                 // /users — list all allowed user IDs
                 if trimmed == "/users" {
                     let reply_text = {
-                        let list = self.allowlist.read().unwrap();
-                        let admin_id = self.admin.read().unwrap().clone().unwrap_or_default();
+                        let list = match self.allowlist.read() {
+                            Ok(g) => g,
+                            Err(poisoned) => {
+                                tracing::error!(
+                                    "Discord allowlist RwLock poisoned in /users, recovering"
+                                );
+                                poisoned.into_inner()
+                            }
+                        };
+                        let admin_id = match self.admin.read() {
+                            Ok(g) => g.clone().unwrap_or_default(),
+                            Err(poisoned) => {
+                                tracing::error!(
+                                    "Discord admin RwLock poisoned in /users, recovering"
+                                );
+                                poisoned.into_inner().clone().unwrap_or_default()
+                            }
+                        };
                         if list.is_empty() {
                             "Allowlist is empty.".to_string()
                         } else {
@@ -609,9 +736,12 @@ impl EventHandler for DiscordHandler {
                             format!("Allowed users:\n{}", lines.join("\n"))
                         }
                     };
-                    let _ = channel_id
+                    if let Err(e) = channel_id
                         .send_message(&ctx.http, CreateMessage::new().content(&reply_text))
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(error = %e, "Failed to send /users reply to Discord");
+                    }
                     return;
                 }
 
@@ -619,16 +749,27 @@ impl EventHandler for DiscordHandler {
                 if let Some(target) = trimmed.strip_prefix("/allow ") {
                     let target = target.trim().to_string();
                     if target.is_empty() {
-                        let _ = channel_id
+                        if let Err(e) = channel_id
                             .send_message(
                                 &ctx.http,
                                 CreateMessage::new().content("Usage: /allow <user_id>"),
                             )
-                            .await;
+                            .await
+                        {
+                            tracing::warn!(error = %e, "Failed to send /allow usage reply to Discord");
+                        }
                         return;
                     }
                     let already_exists = {
-                        let mut list = self.allowlist.write().unwrap();
+                        let mut list = match self.allowlist.write() {
+                            Ok(g) => g,
+                            Err(poisoned) => {
+                                tracing::error!(
+                                    "Discord allowlist RwLock poisoned in /allow, recovering"
+                                );
+                                poisoned.into_inner()
+                            }
+                        };
                         if list.iter().any(|a| a == &target) {
                             true
                         } else {
@@ -637,13 +778,16 @@ impl EventHandler for DiscordHandler {
                         }
                     };
                     if already_exists {
-                        let _ = channel_id
+                        if let Err(e) = channel_id
                             .send_message(
                                 &ctx.http,
                                 CreateMessage::new()
                                     .content(format!("User {} is already allowed.", target)),
                             )
-                            .await;
+                            .await
+                        {
+                            tracing::warn!(error = %e, "Failed to send already-allowed reply to Discord");
+                        }
                         return;
                     }
                     let reply = if let Err(e) = persist_allowlist(&self.allowlist, &self.admin) {
@@ -655,9 +799,12 @@ impl EventHandler for DiscordHandler {
                     } else {
                         format!("User {} added to the allowlist.", target)
                     };
-                    let _ = channel_id
+                    if let Err(e) = channel_id
                         .send_message(&ctx.http, CreateMessage::new().content(&reply))
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(error = %e, "Failed to send /allow reply to Discord");
+                    }
                     tracing::info!(target = %target, "Admin added user to Discord allowlist");
                     return;
                 }
@@ -666,37 +813,54 @@ impl EventHandler for DiscordHandler {
                 if let Some(target) = trimmed.strip_prefix("/revoke ") {
                     let target = target.trim().to_string();
                     if target.is_empty() {
-                        let _ = channel_id
+                        if let Err(e) = channel_id
                             .send_message(
                                 &ctx.http,
                                 CreateMessage::new().content("Usage: /revoke <user_id>"),
                             )
-                            .await;
+                            .await
+                        {
+                            tracing::warn!(error = %e, "Failed to send /revoke usage reply to Discord");
+                        }
                         return;
                     }
                     if target == user_id {
-                        let _ = channel_id
+                        if let Err(e) = channel_id
                             .send_message(
                                 &ctx.http,
                                 CreateMessage::new().content("You cannot revoke yourself."),
                             )
-                            .await;
+                            .await
+                        {
+                            tracing::warn!(error = %e, "Failed to send self-revoke reply to Discord");
+                        }
                         return;
                     }
                     let was_present = {
-                        let mut list = self.allowlist.write().unwrap();
+                        let mut list = match self.allowlist.write() {
+                            Ok(g) => g,
+                            Err(poisoned) => {
+                                tracing::error!(
+                                    "Discord allowlist RwLock poisoned in /revoke, recovering"
+                                );
+                                poisoned.into_inner()
+                            }
+                        };
                         let before = list.len();
                         list.retain(|a| a != &target);
                         list.len() < before
                     };
                     if !was_present {
-                        let _ = channel_id
+                        if let Err(e) = channel_id
                             .send_message(
                                 &ctx.http,
                                 CreateMessage::new()
                                     .content(format!("User {} is not on the allowlist.", target)),
                             )
-                            .await;
+                            .await
+                        {
+                            tracing::warn!(error = %e, "Failed to send not-on-allowlist reply to Discord");
+                        }
                         return;
                     }
                     let reply = if let Err(e) = persist_allowlist(&self.allowlist, &self.admin) {
@@ -711,9 +875,12 @@ impl EventHandler for DiscordHandler {
                     } else {
                         format!("User {} removed from the allowlist.", target)
                     };
-                    let _ = channel_id
+                    if let Err(e) = channel_id
                         .send_message(&ctx.http, CreateMessage::new().content(&reply))
-                        .await;
+                        .await
+                    {
+                        tracing::warn!(error = %e, "Failed to send /revoke reply to Discord");
+                    }
                     tracing::info!(target = %target, "Admin revoked user from Discord allowlist");
                     return;
                 }

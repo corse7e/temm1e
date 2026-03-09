@@ -29,7 +29,10 @@ pub struct OpenAICompatProvider {
 impl OpenAICompatProvider {
     pub fn new(api_key: String) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             keys: vec![api_key],
             key_index: AtomicUsize::new(0),
             base_url: "https://api.openai.com/v1".to_string(),
@@ -56,12 +59,18 @@ impl OpenAICompatProvider {
 
     /// Get the current API key via round-robin rotation.
     fn current_key(&self) -> &str {
+        if self.keys.is_empty() {
+            return "";
+        }
         let idx = self.key_index.load(Ordering::Relaxed) % self.keys.len();
         &self.keys[idx]
     }
 
     /// Advance to the next key (called on rate limit).
     fn rotate_key(&self) {
+        if self.keys.is_empty() {
+            return;
+        }
         let old = self.key_index.fetch_add(1, Ordering::Relaxed);
         let new_idx = (old + 1) % self.keys.len();
         if self.keys.len() > 1 {
@@ -308,7 +317,9 @@ fn convert_message_to_openai(msg: &ChatMessage) -> Result<serde_json::Value, Sky
                     }
                 }
                 if tool_messages.len() == 1 {
-                    return Ok(tool_messages.into_iter().next().unwrap());
+                    return tool_messages.into_iter().next().ok_or_else(|| {
+                        SkyclawError::Provider("Expected tool message but got none".into())
+                    });
                 }
                 if !tool_messages.is_empty() {
                     // Return first tool result message; remaining ones are

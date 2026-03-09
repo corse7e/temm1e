@@ -43,7 +43,17 @@ fn allowlist_path() -> Option<std::path::PathBuf> {
 fn load_allowlist_file() -> Option<AllowlistFile> {
     let path = allowlist_path()?;
     let content = std::fs::read_to_string(&path).ok()?;
-    toml::from_str(&content).ok()
+    match toml::from_str(&content) {
+        Ok(parsed) => Some(parsed),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "Failed to parse allowlist file, ignoring"
+            );
+            None
+        }
+    }
 }
 
 /// Save the allowlist to disk. Creates `~/.skyclaw/` if needed.
@@ -140,7 +150,13 @@ impl TelegramChannel {
     /// An empty allowlist means no one is whitelisted yet (auto-whitelist
     /// happens in `handle_telegram_message` when the first user writes).
     fn check_allowed(&self, user_id: &str, _username: Option<&str>) -> bool {
-        let list = self.allowlist.read().unwrap();
+        let list = match self.allowlist.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::error!("Allowlist RwLock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
         if list.is_empty() {
             return false; // No one whitelisted yet
         }
@@ -413,8 +429,20 @@ fn persist_allowlist(
     allowlist: &Arc<RwLock<Vec<String>>>,
     admin: &Arc<RwLock<Option<String>>>,
 ) -> Result<(), SkyclawError> {
-    let list = allowlist.read().unwrap().clone();
-    let admin_id = admin.read().unwrap().clone().unwrap_or_default();
+    let list = match allowlist.read() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => {
+            tracing::error!("Allowlist RwLock poisoned during persist, recovering");
+            poisoned.into_inner().clone()
+        }
+    };
+    let admin_id = match admin.read() {
+        Ok(guard) => guard.clone().unwrap_or_default(),
+        Err(poisoned) => {
+            tracing::error!("Admin RwLock poisoned during persist, recovering");
+            poisoned.into_inner().clone().unwrap_or_default()
+        }
+    };
     save_allowlist_file(&AllowlistFile {
         admin: admin_id,
         users: list,
@@ -444,10 +472,22 @@ async fn handle_telegram_message(
 
     // ── Auto-whitelist first user & set as admin ──────────────────
     {
-        let mut list = allowlist.write().unwrap();
+        let mut list = match allowlist.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::error!("Allowlist RwLock poisoned in auto-whitelist, recovering");
+                poisoned.into_inner()
+            }
+        };
         if list.is_empty() {
             list.push(user_id.clone());
-            let mut adm = admin.write().unwrap();
+            let mut adm = match admin.write() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::error!("Admin RwLock poisoned in auto-whitelist, recovering");
+                    poisoned.into_inner()
+                }
+            };
             *adm = Some(user_id.clone());
             tracing::info!(user_id = %user_id, username = ?username, "Auto-whitelisted first user as admin");
             // Persist immediately so the admin survives a restart.
@@ -461,7 +501,13 @@ async fn handle_telegram_message(
 
     // ── Reject non-allowlisted users ─────────────────────────────
     {
-        let list = allowlist.read().unwrap();
+        let list = match allowlist.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::error!("Allowlist RwLock poisoned in access check, recovering");
+                poisoned.into_inner()
+            }
+        };
         if !list.iter().any(|a| a == &user_id) {
             drop(list);
             tracing::warn!(user_id = %user_id, username = ?username, "Rejected message from non-allowlisted user");
@@ -476,7 +522,13 @@ async fn handle_telegram_message(
         if trimmed.starts_with("/allow ") || trimmed.starts_with("/revoke ") || trimmed == "/users"
         {
             let is_admin = {
-                let adm = admin.read().unwrap();
+                let adm = match admin.read() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => {
+                        tracing::error!("Admin RwLock poisoned in admin check, recovering");
+                        poisoned.into_inner()
+                    }
+                };
                 adm.as_deref() == Some(&user_id)
             };
 
@@ -488,8 +540,20 @@ async fn handle_telegram_message(
             // /users — list all allowed user IDs
             if trimmed == "/users" {
                 let reply_text = {
-                    let list = allowlist.read().unwrap();
-                    let admin_id = admin.read().unwrap().clone().unwrap_or_default();
+                    let list = match allowlist.read() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => {
+                            tracing::error!("Allowlist RwLock poisoned in /users, recovering");
+                            poisoned.into_inner()
+                        }
+                    };
+                    let admin_id = match admin.read() {
+                        Ok(guard) => guard.clone().unwrap_or_default(),
+                        Err(poisoned) => {
+                            tracing::error!("Admin RwLock poisoned in /users, recovering");
+                            poisoned.into_inner().clone().unwrap_or_default()
+                        }
+                    };
                     if list.is_empty() {
                         "Allowlist is empty.".to_string()
                     } else {
@@ -516,7 +580,13 @@ async fn handle_telegram_message(
                     return Ok(());
                 }
                 let already_exists = {
-                    let mut list = allowlist.write().unwrap();
+                    let mut list = match allowlist.write() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => {
+                            tracing::error!("Allowlist RwLock poisoned in /allow, recovering");
+                            poisoned.into_inner()
+                        }
+                    };
                     if list.iter().any(|a| a == &target) {
                         true
                     } else {
@@ -566,7 +636,13 @@ async fn handle_telegram_message(
                     return Ok(());
                 }
                 let was_present = {
-                    let mut list = allowlist.write().unwrap();
+                    let mut list = match allowlist.write() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => {
+                            tracing::error!("Allowlist RwLock poisoned in /revoke, recovering");
+                            poisoned.into_inner()
+                        }
+                    };
                     let before = list.len();
                     list.retain(|a| a != &target);
                     list.len() < before

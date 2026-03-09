@@ -130,7 +130,8 @@ pub fn detect_credentials(text: &str) -> Vec<DetectedCredential> {
     // 1. Provider-specific patterns.
     for pat in PROVIDER_PATTERNS.iter() {
         for caps in pat.regex.captures_iter(text) {
-            let value = caps.get(1).unwrap().as_str().to_string();
+            let Some(m) = caps.get(1) else { continue };
+            let value = m.as_str().to_string();
             if seen_values.insert(value.clone()) {
                 results.push(DetectedCredential {
                     key: pat.key.to_string(),
@@ -144,8 +145,10 @@ pub fn detect_credentials(text: &str) -> Vec<DetectedCredential> {
     // 2. Generic assignment patterns.
     for pat in GENERIC_PATTERNS.iter() {
         for caps in pat.regex.captures_iter(text) {
-            let key_name = caps.get(1).unwrap().as_str().to_lowercase();
-            let value = caps.get(2).unwrap().as_str().to_string();
+            let Some(m1) = caps.get(1) else { continue };
+            let Some(m2) = caps.get(2) else { continue };
+            let key_name = m1.as_str().to_lowercase();
+            let value = m2.as_str().to_string();
             if seen_values.insert(value.clone()) {
                 results.push(DetectedCredential {
                     key: key_name,
