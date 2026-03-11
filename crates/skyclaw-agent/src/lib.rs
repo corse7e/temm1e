@@ -16,6 +16,7 @@ pub mod output_compression;
 pub mod proactive;
 pub mod prompt_optimizer;
 pub mod prompt_patches;
+pub mod prompted_tool_calling;
 pub mod recovery;
 pub mod runtime;
 pub mod self_correction;

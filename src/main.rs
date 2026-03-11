@@ -893,6 +893,57 @@ fn censor_secrets(text: &str) -> String {
     censored
 }
 
+/// Format a SkyclawError into a user-friendly message for chat.
+///
+/// Translates raw error variants into human-readable explanations with
+/// actionable suggestions.  Raw JSON bodies and internal details are
+/// never exposed to end-users.
+fn format_user_error(e: &skyclaw_core::types::error::SkyclawError) -> String {
+    use skyclaw_core::types::error::SkyclawError;
+    match e {
+        SkyclawError::Provider(msg) => {
+            // Detect common sub-categories from the raw message
+            if msg.contains("400") || msg.contains("Bad Request") || msg.contains("validation") {
+                "The AI provider rejected the request. This can happen when the model \
+                 doesn't support certain features (like tool calling). Try switching \
+                 models with /model."
+                    .to_string()
+            } else if msg.contains("500") || msg.contains("502") || msg.contains("503") {
+                "The AI provider is experiencing issues. Please try again in a moment.".to_string()
+            } else if msg.contains("timeout") || msg.contains("timed out") {
+                "The request to the AI provider timed out. Please try again.".to_string()
+            } else {
+                "An error occurred with the AI provider. Please try again or switch \
+                 models with /model."
+                    .to_string()
+            }
+        }
+        SkyclawError::Auth(_) => {
+            "API key issue — your key may be invalid or expired. Use /addkey to \
+             update it."
+                .to_string()
+        }
+        SkyclawError::RateLimited(_) => {
+            "Rate limited by the AI provider. Please wait a moment and try again.".to_string()
+        }
+        SkyclawError::Tool(msg) => {
+            format!("A tool encountered an error: {msg}")
+        }
+        SkyclawError::Memory(_) => {
+            "An error occurred accessing conversation memory. Your message wasn't \
+             lost — please try again."
+                .to_string()
+        }
+        SkyclawError::Config(_) => {
+            "Configuration error. Please check your setup with /status.".to_string()
+        }
+        _ => {
+            // Generic fallback — still never shows raw internals
+            "An unexpected error occurred. Please try again.".to_string()
+        }
+    }
+}
+
 // ── OTK key management helpers ────────────────────────────
 
 /// List configured providers (names only, never keys).
@@ -2819,9 +2870,10 @@ Just type a message to chat with the AI agent.",
                                             }
                                             Ok(Err(e)) => {
                                                 tracing::error!(error = %e, "Agent processing error");
+                                                let user_msg = format_user_error(&e);
                                                 let error_reply = skyclaw_core::types::message::OutboundMessage {
                                                     chat_id: msg.chat_id.clone(),
-                                                    text: censor_secrets(&format!("Error: {}", e)),
+                                                    text: censor_secrets(&user_msg),
                                                     reply_to: Some(msg.id.clone()),
                                                     parse_mode: None,
                                                 };
@@ -4055,7 +4107,8 @@ Just type a message to chat with the AI agent.",
                             }
                         }
                         Ok(Err(e)) => {
-                            eprintln!("  [error: {}]", e);
+                            tracing::error!(error = %e, "CLI agent processing error");
+                            eprintln!("  [{}]", format_user_error(&e));
                             eprint!("skyclaw> ");
                         }
                         Err(panic_info) => {

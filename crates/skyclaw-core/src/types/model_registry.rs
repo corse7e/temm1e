@@ -102,6 +102,18 @@ fn lookup(model: &str) -> Option<ModelLimits> {
             context_window: 200_000,
             max_output_tokens: 100_000,
         },
+        "gpt-4o" | "gpt-4o-2024-08-06" => ModelLimits {
+            context_window: 128_000,
+            max_output_tokens: 16_384,
+        },
+        "gpt-4o-mini" => ModelLimits {
+            context_window: 128_000,
+            max_output_tokens: 16_384,
+        },
+        "gpt-3.5-turbo" => ModelLimits {
+            context_window: 16_385,
+            max_output_tokens: 4_096,
+        },
 
         // ── Google Gemini ─────────────────────────────────────────────
         "gemini-3-flash-preview" | "gemini-3-flash" => ModelLimits {

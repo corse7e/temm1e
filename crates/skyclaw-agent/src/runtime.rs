@@ -34,6 +34,7 @@ use crate::context::build_context;
 use crate::done_criteria::{self, DoneCriteria};
 use crate::executor::execute_tool;
 use crate::learning;
+use crate::prompted_tool_calling::{self, PromptedToolResult};
 use crate::self_correction::FailureTracker;
 use crate::task_queue::TaskQueue;
 
@@ -506,6 +507,14 @@ impl AgentRuntime {
         // Track consecutive tool failures per tool name.
         let mut failure_tracker = FailureTracker::new(self.max_consecutive_failures);
 
+        // ── Prompted Tool Calling Fallback ────────────────────────────
+        // When native tool calling fails (provider 400), we switch to
+        // prompted mode: tool definitions go into the system prompt and
+        // the model outputs JSON instead of native tool_calls.
+        let mut prompted_mode = false;
+        let mut prompted_json_retries: u8 = 0;
+        const MAX_PROMPTED_JSON_RETRIES: u8 = 1;
+
         // Tool-use loop
         let task_start = Instant::now();
         let mut rounds: usize = 0;
@@ -552,7 +561,7 @@ impl AgentRuntime {
 
             // Build the completion request from full context
             let prompt_tier = execution_profile.as_ref().map(|p| p.prompt_tier);
-            let request = build_context(
+            let mut request = build_context(
                 session,
                 self.memory.as_ref(),
                 &self.tools,
@@ -564,9 +573,29 @@ impl AgentRuntime {
             )
             .await;
 
+            // ── Prompted mode: move tools from API body into system prompt ──
+            if prompted_mode && !request.tools.is_empty() {
+                let tool_prompt = prompted_tool_calling::format_tools_prompt(&request.tools);
+                request.system = Some(match request.system {
+                    Some(existing) => format!("{existing}{tool_prompt}"),
+                    None => tool_prompt,
+                });
+                // If this is a JSON retry, append the stricter instruction
+                if prompted_json_retries > 0 {
+                    let retry_hint = prompted_tool_calling::format_strict_retry_prompt();
+                    request.system = request.system.map(|s| format!("{s}\n\n{retry_hint}"));
+                }
+                request.tools.clear();
+                debug!(
+                    round = rounds,
+                    "Prompted tool-calling mode: tools in system prompt"
+                );
+            }
+
             debug!(
                 round = rounds,
                 messages = request.messages.len(),
+                prompted_mode,
                 "Sending completion request"
             );
 
@@ -622,12 +651,49 @@ impl AgentRuntime {
                 });
             }
 
+            // Track whether the original request had tools (for fallback detection)
+            let request_had_tools = !self.tools.is_empty();
+
             let response = match self.provider.complete(request).await {
                 Ok(resp) => {
                     self.circuit_breaker.record_success();
                     resp
                 }
                 Err(e) => {
+                    // ── Prompted Tool Calling Fallback ─────────────────────
+                    // If the provider returned an error and the request had
+                    // tools, this might be a model that doesn't support native
+                    // function calling.  Switch to prompted mode and retry.
+                    if request_had_tools && !prompted_mode {
+                        let err_str = format!("{e}");
+                        // Heuristic: 400-class errors with tool-bearing requests
+                        // MAY indicate tool-unsupported.  We check for tool-related
+                        // keywords and exclude known non-tool errors (max_tokens,
+                        // temperature, model).
+                        let is_tool_candidate = matches!(&e,
+                            SkyclawError::Provider(msg) if (
+                                msg.contains("400") || msg.contains("Bad Request")
+                            ) && (
+                                msg.contains("tool")
+                                || msg.contains("function")
+                                || msg.contains("Input validation error")
+                                || (msg.contains("not supported") && !msg.contains("max_tokens"))
+                            ) && !msg.contains("max_tokens")
+                              && !msg.contains("temperature")
+                              && !msg.contains("context_length")
+                        );
+                        if is_tool_candidate {
+                            warn!(
+                                error = %err_str,
+                                model = %self.model,
+                                "Native tool calling failed — falling back to prompted JSON mode"
+                            );
+                            prompted_mode = true;
+                            // Don't count this as a circuit breaker failure —
+                            // it's a capability mismatch, not a provider outage.
+                            continue;
+                        }
+                    }
                     self.circuit_breaker.record_failure();
                     return Err(e);
                 }
@@ -660,7 +726,9 @@ impl AgentRuntime {
                 });
             }
 
-            // Separate text content from tool-use content
+            // Separate text content from tool-use content.
+            // In prompted mode, tool calls come as JSON inside the text —
+            // we parse them below instead of looking for ContentPart::ToolUse.
             let mut text_parts: Vec<String> = Vec::new();
             let mut tool_uses: Vec<(String, String, serde_json::Value)> = Vec::new();
 
@@ -674,6 +742,67 @@ impl AgentRuntime {
                     }
                     ContentPart::ToolResult { .. } | ContentPart::Image { .. } => {
                         // Should not appear in provider response, ignore
+                    }
+                }
+            }
+
+            // ── Prompted Mode: parse JSON tool calls from text ──────
+            if prompted_mode && tool_uses.is_empty() && !text_parts.is_empty() {
+                let combined_text = text_parts.join("\n");
+                match prompted_tool_calling::parse_tool_call_json(&combined_text) {
+                    PromptedToolResult::ToolCall {
+                        response_text,
+                        tool_name,
+                        arguments,
+                    } => {
+                        // Validate the tool actually exists
+                        let tool_exists = self.tools.iter().any(|t| t.name() == tool_name);
+                        if tool_exists {
+                            info!(
+                                tool = %tool_name,
+                                "Prompted mode: parsed tool call from JSON response"
+                            );
+                            // Synthesize a tool_use_id for the prompted call
+                            let synthetic_id = format!("prompted-{}", uuid::Uuid::new_v4());
+                            tool_uses.push((synthetic_id, tool_name, arguments));
+                            // Replace text_parts with the response text so it's
+                            // available for early-reply or history recording.
+                            text_parts.clear();
+                            if !response_text.is_empty() {
+                                text_parts.push(response_text);
+                            }
+                        } else {
+                            debug!(
+                                tool = %tool_name,
+                                "Prompted mode: model requested non-existent tool, treating as text"
+                            );
+                            // Fall through — text_parts has the raw response
+                        }
+                    }
+                    PromptedToolResult::TextOnly(_) => {
+                        // Model didn't output a tool call — that's fine,
+                        // text_parts already has the response content.
+                        // But if this was the first round and we expected a
+                        // tool call (e.g. model ignored our JSON instruction),
+                        // retry once with a stricter prompt.
+                        if prompted_json_retries < MAX_PROMPTED_JSON_RETRIES
+                            && rounds == 1
+                            && request_had_tools
+                        {
+                            debug!(
+                                retry = prompted_json_retries + 1,
+                                "Prompted mode: no tool call in response, retrying with stricter prompt"
+                            );
+                            prompted_json_retries += 1;
+                            // Record this assistant response in history so the
+                            // stricter prompt has context
+                            session.history.push(ChatMessage {
+                                role: Role::Assistant,
+                                content: MessageContent::Text(combined_text),
+                            });
+                            continue;
+                        }
+                        // Retries exhausted or not first round — use text as-is
                     }
                 }
             }
@@ -773,11 +902,26 @@ impl AgentRuntime {
                 ));
             }
 
-            // Record the assistant message (with tool_use parts) in history
-            session.history.push(ChatMessage {
-                role: Role::Assistant,
-                content: MessageContent::Parts(response.content.clone()),
-            });
+            // Record the assistant message in history.
+            // In prompted mode the response is plain text (no ToolUse parts),
+            // so we record just the text to avoid confusing the conversation
+            // format for providers that don't speak native tool_calls.
+            if prompted_mode {
+                let assistant_text = text_parts.join("\n");
+                session.history.push(ChatMessage {
+                    role: Role::Assistant,
+                    content: MessageContent::Text(if assistant_text.is_empty() {
+                        "(calling tool)".to_string()
+                    } else {
+                        assistant_text
+                    }),
+                });
+            } else {
+                session.history.push(ChatMessage {
+                    role: Role::Assistant,
+                    content: MessageContent::Parts(response.content.clone()),
+                });
+            }
 
             // Execute each tool call and collect results
             let mut tool_result_parts: Vec<ContentPart> = Vec::new();
@@ -942,11 +1086,34 @@ impl AgentRuntime {
                 }
             }
 
-            // Append tool results as a Tool message in history
-            session.history.push(ChatMessage {
-                role: Role::Tool,
-                content: MessageContent::Parts(tool_result_parts),
-            });
+            // Append tool results to history.
+            // In prompted mode, use a User message with plain text so the
+            // provider doesn't see Role::Tool + ContentPart::ToolResult
+            // which would require native tool_calls in the assistant message.
+            if prompted_mode {
+                let tool_results_text: String = tool_result_parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        ContentPart::ToolResult {
+                            content, is_error, ..
+                        } => {
+                            let prefix = if *is_error { "Error" } else { "Result" };
+                            Some(format!("[Tool {prefix}]: {content}"))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                session.history.push(ChatMessage {
+                    role: Role::User,
+                    content: MessageContent::Text(tool_results_text),
+                });
+            } else {
+                session.history.push(ChatMessage {
+                    role: Role::Tool,
+                    content: MessageContent::Parts(tool_result_parts),
+                });
+            }
 
             // ── Task Queue Checkpoint ────────────────────────────────
             // After each successful tool round, checkpoint the session state
