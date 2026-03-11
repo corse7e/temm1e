@@ -98,7 +98,7 @@ ORDER ─→ THINK ─→ ACTION ─→ VERIFY ─┐
 | **Implemented features** | 52 across 10 phases |
 | **AGENTIC CORE modules** | 20 + 5 v2 modules |
 | **Traits (core)** | 14 shared trait definitions |
-| **AI providers** | 7 (Anthropic, OpenAI, Gemini, Grok, OpenRouter, Z.ai, MiniMax) |
+| **AI providers** | 7 + Codex OAuth (Anthropic, OpenAI, Gemini, Grok, OpenRouter, Z.ai, MiniMax, [OpenAI Codex via OAuth](#codex-oauth)) |
 | **Messaging channels** | 4 ([Telegram](docs/channels/telegram.md), [Discord](docs/channels/discord.md), [Slack](docs/channels/slack.md), [CLI](docs/channels/cli.md)) |
 | **Agent tools** | 13 (shell, browser, file ops, web fetch, git, messaging, file transfer, memory manage, key manage, self_create_tool, mcp_manage, self_extend_tool, self_add_mcp) + custom script tools |
 | **MCP support** | stdio + HTTP transports, 14 built-in server registry, hot-loading, auto-restart |
@@ -189,6 +189,36 @@ Paste any of these API keys in Telegram — SkyClaw detects the provider automat
 | `sk-or-*` | OpenRouter | anthropic/claude-sonnet-4-6 |
 | *(explicit: `zai:KEY`)* | Z.ai (Zhipu) | glm-4.7-flash |
 | *(config only)* | MiniMax | MiniMax-M2.5 |
+
+### Codex OAuth
+
+Use your ChatGPT Plus/Pro subscription instead of an API key. SkyClaw authenticates via OpenAI's OAuth PKCE flow and routes through the Codex backend API.
+
+```bash
+# One-time login (opens browser)
+skyclaw auth login
+
+# Or headless (prints URL, paste redirect back)
+skyclaw auth login --headless
+
+# Check status
+skyclaw auth status
+
+# Logout
+skyclaw auth logout
+```
+
+Then set your config:
+
+```toml
+[provider]
+name = "openai-codex"
+model = "gpt-5.3-codex"  # or gpt-5.4, gpt-5.2-codex, etc.
+```
+
+Supported Codex models: `gpt-5.4`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`, `gpt-5.2-codex`, `gpt-5.2`, `gpt-5.1-codex`, `gpt-5`, `gpt-5-codex-mini`.
+
+The `codex-oauth` feature flag is enabled by default. Tokens are stored in `~/.skyclaw/oauth.json` and auto-refresh before expiry.
 
 ## Channels
 

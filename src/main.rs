@@ -100,6 +100,27 @@ enum Commands {
     Version,
     /// Check for updates and install if available
     Update,
+    /// Manage OpenAI Codex OAuth authentication
+    #[cfg(feature = "codex-oauth")]
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommands,
+    },
+}
+
+#[cfg(feature = "codex-oauth")]
+#[derive(Subcommand)]
+enum AuthCommands {
+    /// Authenticate with your ChatGPT Plus/Pro subscription via OAuth
+    Login {
+        /// Use headless mode (paste URL instead of browser redirect)
+        #[arg(long)]
+        headless: bool,
+    },
+    /// Show current OAuth authentication status
+    Status,
+    /// Remove OAuth tokens and log out
+    Logout,
 }
 
 #[derive(Subcommand)]
@@ -1710,8 +1731,30 @@ async fn main() -> Result<()> {
                         base_url: effective_base_url,
                         extra_headers: config.provider.extra_headers.clone(),
                     };
-                    let provider: Arc<dyn skyclaw_core::Provider> =
-                        Arc::from(skyclaw_providers::create_provider(&provider_config)?);
+                    // Create provider — route to Codex OAuth if configured
+                    let provider: Arc<dyn skyclaw_core::Provider> = {
+                        #[cfg(feature = "codex-oauth")]
+                        if pname == "openai-codex" {
+                            let token_store =
+                                std::sync::Arc::new(skyclaw_codex_oauth::TokenStore::load()?);
+                            Arc::new(skyclaw_codex_oauth::CodexResponsesProvider::new(
+                                model.clone(),
+                                token_store,
+                            ))
+                        } else {
+                            Arc::from(skyclaw_providers::create_provider(&provider_config)?)
+                        }
+                        #[cfg(not(feature = "codex-oauth"))]
+                        {
+                            if pname == "openai-codex" {
+                                return Err(anyhow::anyhow!(
+                                    "OpenAI Codex OAuth requires the 'codex-oauth' feature. \
+                                     Build with: cargo build --features codex-oauth"
+                                ));
+                            }
+                            Arc::from(skyclaw_providers::create_provider(&provider_config)?)
+                        }
+                    };
                     let agent = Arc::new(
                         skyclaw_agent::AgentRuntime::with_limits(
                             provider.clone(),
@@ -1731,7 +1774,54 @@ async fn main() -> Result<()> {
                     tracing::info!(provider = %pname, model = %model, "Agent initialized");
                 }
             } else {
-                tracing::info!("No API key — starting in onboarding mode");
+                // Check if Codex OAuth tokens exist — use those instead of API key
+                #[cfg(feature = "codex-oauth")]
+                {
+                    let pname = config.provider.name.clone().unwrap_or_default();
+                    if pname == "openai-codex" && skyclaw_codex_oauth::TokenStore::exists() {
+                        let model = config
+                            .provider
+                            .model
+                            .clone()
+                            .unwrap_or_else(|| "gpt-4o-mini".to_string());
+                        match skyclaw_codex_oauth::TokenStore::load() {
+                            Ok(store) => {
+                                let token_store = std::sync::Arc::new(store);
+                                let provider: Arc<dyn skyclaw_core::Provider> =
+                                    Arc::new(skyclaw_codex_oauth::CodexResponsesProvider::new(
+                                        model.clone(),
+                                        token_store,
+                                    ));
+                                let agent = Arc::new(
+                                    skyclaw_agent::AgentRuntime::with_limits(
+                                        provider.clone(),
+                                        memory.clone(),
+                                        tools.clone(),
+                                        model.clone(),
+                                        system_prompt.clone(),
+                                        config.agent.max_turns,
+                                        config.agent.max_context_tokens,
+                                        config.agent.max_tool_rounds,
+                                        config.agent.max_task_duration_secs,
+                                        config.agent.max_spend_usd,
+                                    )
+                                    .with_v2_optimizations(config.agent.v2_optimizations),
+                                );
+                                *agent_state.write().await = Some(agent);
+                                tracing::info!(provider = %pname, model = %model, "Agent initialized via Codex OAuth");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "Codex OAuth tokens exist but failed to load — starting in onboarding mode");
+                            }
+                        }
+                    } else {
+                        tracing::info!("No API key — starting in onboarding mode");
+                    }
+                }
+                #[cfg(not(feature = "codex-oauth"))]
+                {
+                    tracing::info!("No API key — starting in onboarding mode");
+                }
             }
 
             // ── Unified message channel ────────────────────────
@@ -3294,9 +3384,36 @@ Just type a message to chat with the AI agent.";
                         base_url: effective_base_url,
                         extra_headers: config.provider.extra_headers.clone(),
                     };
-                    match skyclaw_providers::create_provider(&provider_config) {
+                    // Create provider — route to Codex OAuth if configured
+                    let provider_result: Result<Arc<dyn skyclaw_core::Provider>, String> = {
+                        #[cfg(feature = "codex-oauth")]
+                        if pname == "openai-codex" {
+                            match skyclaw_codex_oauth::TokenStore::load() {
+                                Ok(store) => Ok(Arc::new(
+                                    skyclaw_codex_oauth::CodexResponsesProvider::new(
+                                        model.clone(),
+                                        std::sync::Arc::new(store),
+                                    ),
+                                )),
+                                Err(e) => Err(format!(
+                                    "Codex OAuth not configured: {}. Run `skyclaw auth login` first.",
+                                    e
+                                )),
+                            }
+                        } else {
+                            skyclaw_providers::create_provider(&provider_config)
+                                .map(|p| Arc::from(p) as Arc<dyn skyclaw_core::Provider>)
+                                .map_err(|e| e.to_string())
+                        }
+                        #[cfg(not(feature = "codex-oauth"))]
+                        {
+                            skyclaw_providers::create_provider(&provider_config)
+                                .map(|p| Arc::from(p) as Arc<dyn skyclaw_core::Provider>)
+                                .map_err(|e| e.to_string())
+                        }
+                    };
+                    match provider_result {
                         Ok(provider) => {
-                            let provider: Arc<dyn skyclaw_core::Provider> = Arc::from(provider);
                             let system_prompt = Some(build_system_prompt());
                             agent_opt = Some(
                                 skyclaw_agent::AgentRuntime::with_limits(
@@ -3327,6 +3444,53 @@ Just type a message to chat with the AI agent.";
                 }
             }
 
+            if agent_opt.is_none() {
+                // Check if Codex OAuth tokens exist — use those instead of API key
+                #[cfg(feature = "codex-oauth")]
+                {
+                    let pname = config.provider.name.clone().unwrap_or_default();
+                    if pname == "openai-codex" && skyclaw_codex_oauth::TokenStore::exists() {
+                        let model = config
+                            .provider
+                            .model
+                            .clone()
+                            .unwrap_or_else(|| "gpt-4o-mini".to_string());
+                        match skyclaw_codex_oauth::TokenStore::load() {
+                            Ok(store) => {
+                                let token_store = std::sync::Arc::new(store);
+                                let provider: Arc<dyn skyclaw_core::Provider> =
+                                    Arc::new(skyclaw_codex_oauth::CodexResponsesProvider::new(
+                                        model.clone(),
+                                        token_store,
+                                    ));
+                                let system_prompt = Some(build_system_prompt());
+                                agent_opt = Some(
+                                    skyclaw_agent::AgentRuntime::with_limits(
+                                        provider,
+                                        memory.clone(),
+                                        tools_template.clone(),
+                                        model.clone(),
+                                        system_prompt,
+                                        max_turns,
+                                        max_ctx,
+                                        max_rounds,
+                                        max_task_duration,
+                                        max_spend,
+                                    )
+                                    .with_v2_optimizations(v2_opt),
+                                );
+                                println!(
+                                    "Connected to {} via Codex OAuth (model: {})",
+                                    pname, model
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "Codex OAuth tokens exist but failed to load");
+                            }
+                        }
+                    }
+                }
+            }
             if agent_opt.is_none() {
                 println!("No API key configured — running in onboarding mode.");
                 // Auto-generate OTK and show setup link immediately
@@ -4105,6 +4269,64 @@ Just type a message to chat with the AI agent.";
             println!("skyclaw {}", env!("CARGO_PKG_VERSION"));
             println!("Cloud-native Rust AI agent runtime — Telegram-native");
         }
+        #[cfg(feature = "codex-oauth")]
+        Commands::Auth { command } => match command {
+            AuthCommands::Login { headless } => {
+                println!("SkyClaw — OpenAI Codex OAuth Login");
+                println!("Authenticating with your ChatGPT subscription...\n");
+
+                match skyclaw_codex_oauth::login(headless).await {
+                    Ok(store) => {
+                        let email = store.email().await;
+                        let expires = store.expires_in().await;
+                        println!("\n  Authenticated successfully!");
+                        println!("  Email:   {}", email);
+                        println!("  Expires: {}", expires);
+                        println!("\n  To use Codex, set your config to:");
+                        println!("    [provider]");
+                        println!("    name = \"openai-codex\"");
+                        println!("    model = \"gpt-5.3-codex\"");
+                    }
+                    Err(e) => {
+                        eprintln!("Authentication failed: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            AuthCommands::Status => {
+                if !skyclaw_codex_oauth::TokenStore::exists() {
+                    println!("Not authenticated. Run `skyclaw auth login` to connect your ChatGPT account.");
+                    return Ok(());
+                }
+                match skyclaw_codex_oauth::TokenStore::load() {
+                    Ok(store) => {
+                        let email = store.email().await;
+                        let account = store.account_id().await;
+                        let expires = store.expires_in().await;
+                        let expired = store.is_expired().await;
+                        println!("SkyClaw — Codex OAuth Status");
+                        println!("  Email:      {}", email);
+                        println!("  Account:    {}", account);
+                        println!(
+                            "  Token:      {}",
+                            if expired { "expired" } else { "valid" }
+                        );
+                        println!("  Expires in: {}", expires);
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to read OAuth tokens: {}", e);
+                    }
+                }
+            }
+            AuthCommands::Logout => match skyclaw_codex_oauth::TokenStore::delete() {
+                Ok(()) => {
+                    println!("Logged out. OAuth tokens removed.");
+                }
+                Err(e) => {
+                    eprintln!("Failed to remove tokens: {}", e);
+                }
+            },
+        },
     }
 
     Ok(())
