@@ -55,7 +55,7 @@ impl Channel for SecretCensorChannel {
 #[derive(Parser)]
 #[command(name = "skyclaw")]
 #[command(about = "Cloud-native Rust AI agent runtime — Telegram-native")]
-#[command(version)]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " — commit: ", env!("GIT_HASH"), " — date: ", env!("BUILD_DATE")))]
 struct Cli {
     /// Path to config file
     #[arg(short, long)]
@@ -2253,7 +2253,8 @@ async fn main() -> Result<()> {
 
                                     // /help — list available commands
                                     if cmd_lower == "/help" {
-                                        let help_text = "\
+                                        let help_text = format!("\
+skyclaw {} — commit: {} — date: {}\n\n\
 Available commands:\n\n\
 /help — Show this help message\n\
 /addkey — Securely add an API key (encrypted OTK flow)\n\
@@ -2268,7 +2269,11 @@ Available commands:\n\n\
 /mcp remove <name> — Disconnect an MCP server\n\
 /mcp restart <name> — Restart an MCP server\n\
 /restart — Restart SkyClaw (server mode only)\n\n\
-Just type a message to chat with the AI agent.";
+Just type a message to chat with the AI agent.",
+                                            env!("CARGO_PKG_VERSION"),
+                                            env!("GIT_HASH"),
+                                            env!("BUILD_DATE"),
+                                        );
                                         let reply = skyclaw_core::types::message::OutboundMessage {
                                             chat_id: msg.chat_id.clone(),
                                             text: help_text.to_string(),
@@ -3606,7 +3611,8 @@ Just type a message to chat with the AI agent.";
                 // /help — list available commands
                 if cmd_lower == "/help" {
                     println!(
-                        "\nAvailable commands:\n\n\
+                        "\nskyclaw {} — commit: {} — date: {}\n\n\
+                         Available commands:\n\n\
                          /help — Show this help message\n\
                          /addkey — Securely add an API key (encrypted OTK flow)\n\
                          /addkey unsafe — Add an API key by pasting directly\n\
@@ -3620,7 +3626,10 @@ Just type a message to chat with the AI agent.";
                          /mcp remove <name> — Disconnect an MCP server\n\
                          /mcp restart <name> — Restart an MCP server\n\
                          /quit — Exit the CLI chat\n\n\
-                         Just type a message to chat with the AI agent.\n"
+                         Just type a message to chat with the AI agent.\n",
+                        env!("CARGO_PKG_VERSION"),
+                        env!("GIT_HASH"),
+                        env!("BUILD_DATE"),
                     );
                     eprint!("skyclaw> ");
                     continue;
@@ -4268,7 +4277,12 @@ Just type a message to chat with the AI agent.";
             }
         }
         Commands::Version => {
-            println!("skyclaw {}", env!("CARGO_PKG_VERSION"));
+            println!(
+                "skyclaw {} — commit: {} — date: {}",
+                env!("CARGO_PKG_VERSION"),
+                env!("GIT_HASH"),
+                env!("BUILD_DATE")
+            );
             println!("Cloud-native Rust AI agent runtime — Telegram-native");
         }
         #[cfg(feature = "codex-oauth")]
