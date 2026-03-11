@@ -10,7 +10,7 @@
   <a href="https://github.com/nagisanzenin/skyclaw/stargazers"><img src="https://img.shields.io/github/stars/nagisanzenin/skyclaw?style=flat&color=gold&logo=github" alt="GitHub Stars"></a>
   <a href="https://discord.gg/3ux2c5xz"><img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-2.3.0-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-2.3.1-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/tests-1307-green.svg" alt="1307 tests">
   <img src="https://img.shields.io/badge/providers-8-red.svg" alt="8 providers">
 </p>
@@ -22,7 +22,7 @@ Deploys once, stays up forever. Learns from every task, remembers across session
 
 **v2.3: Codex OAuth** — use your ChatGPT Plus/Pro subscription as an AI provider. OAuth PKCE login, Responses API streaming, auto-refresh tokens.
 
-58K lines | 1,307 tests | zero warnings | zero panic paths | 15 MB idle RAM | 31ms cold start | [Benchmark report](docs/benchmarks/BENCHMARK_REPORT.md)
+59K lines | 1,307 tests | zero warnings | zero panic paths | 15 MB idle RAM | 31ms cold start | [Benchmark report](docs/benchmarks/BENCHMARK_REPORT.md)
 
 ## What It Does
 
@@ -91,7 +91,7 @@ ORDER ─→ THINK ─→ ACTION ─→ VERIFY ─┐
 
 | Metric | Value |
 |--------|-------|
-| **Lines of Rust** | 58,381 across 124 source files |
+| **Lines of Rust** | 58,788 across 125 source files |
 | **Tests** | 1,307 passing, 0 failures |
 | **Clippy warnings** | 0 (CI gate: `-D warnings`) |
 | **Workspace crates** | 15 + 1 binary |
@@ -422,7 +422,7 @@ Checks for new commits, pulls the latest code, and rebuilds the release binary i
 ```bash
 $ skyclaw update
 SkyClaw Update
-Current version: 2.3.0
+Current version: 2.3.1
 
 Fetching latest changes...
 3 new commit(s):
@@ -460,6 +460,8 @@ cargo build --release                                      # Release build
 ## Release Timeline
 
 ```
+2026-03-11  v2.3.1  ●━━━ Model registry — per-model context window and output token limits for 50+ models, 10% input budget safety margin for token estimation errors, auto-cap for small models (#6), 1307 tests
+                    │
 2026-03-11  v2.3.0  ●━━━ Codex OAuth — use ChatGPT Plus/Pro subscription as AI provider via OAuth PKCE, skyclaw-codex-oauth crate (Responses API streaming, item_id/call_id accumulator, strict:false tool format), skyclaw auth login/status/logout commands, headless + browser flows, auto-refresh tokens, gpt-5.4 recommended for full agent functionality, 1297 tests
                     │
 2026-03-11  v2.2.0  ●━━━ Custom tool authoring + daemon mode — self_create_tool lets the agent write bash/python/node tools at runtime (persisted to ~/.skyclaw/custom-tools/), ScriptToolAdapter + CustomToolRegistry with hot-reload, skyclaw start --daemon / skyclaw stop for background operation, 1278 tests
