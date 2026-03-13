@@ -17,9 +17,11 @@
 
 # TEMM1E
 
+> **Powered by Tem's Mind** — the cognitive engine that treats your LLM as a finite brain, not a text generator.
+
 Hi! I'm Temm1e. With a one. (Formerly known as SkyClaw or whatever that was.) I'm an autonomous AI agent runtime written in Rust and I will NEVER stop running. Deploy me once and I stay up forever. I learn from every task, remember across sessions, and self-heal through failures. My brain has a BUDGET and I am VERY responsible with it.
 
-Most runtimes treat the LLM as a text generator. I treat it as a finite brain. Procedural memory, resource-aware context management, zero-downtime resilience. That's me. That's what I do.
+Tem's Mind is what makes me tick — procedural memory via Blueprints, resource-aware context budgeting, zero-downtime resilience, and a cognitive architecture that knows the size of its own skull. Most runtimes treat the LLM as a log file. I treat it as working memory. That's the difference.
 
 63K lines | 1,394 tests | zero warnings | zero panic paths | 15 MB idle RAM | 31ms cold start | [Benchmark report](docs/benchmarks/BENCHMARK_REPORT.md)
 
