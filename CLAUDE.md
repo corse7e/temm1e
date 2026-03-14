@@ -33,9 +33,13 @@ cargo fmt --all
 # Build release binary
 cargo build --release --bin temm1e
 
+# Build with TUI feature
+cargo build --release --features tui
+
 # Run the binary
 cargo run -- start
 cargo run -- chat
+cargo run --features tui -- tui    # Interactive TUI
 cargo run -- status
 cargo run -- config validate
 ```
@@ -50,6 +54,7 @@ crates/
   temm1e-gateway     -- HTTP/WebSocket server, routing, session management
   temm1e-agent       -- Agent runtime loop, context, executor
   temm1e-providers   -- AI provider integrations (Anthropic, OpenAI-compatible)
+  temm1e-tui         -- Interactive terminal UI (ratatui, syntect, crossterm)
   temm1e-channels    -- Messaging channels (CLI, Telegram, Discord, Slack)
   temm1e-memory      -- Persistent memory backends (SQLite, Markdown)
   temm1e-tools       -- Agent tool implementations (shell, browser, file ops)

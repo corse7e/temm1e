@@ -35,6 +35,8 @@ pub struct AgentSetup {
     pub model: String,
     pub base_url: Option<String>,
     pub config: Temm1eConfig,
+    /// Selected personality mode (auto/play/work/pro).
+    pub mode: Option<String>,
 }
 
 /// Create the agent runtime from credentials and spawn the processing loop.
@@ -114,8 +116,13 @@ pub async fn spawn_agent(
         .join("workspace");
     std::fs::create_dir_all(&workspace).ok();
 
-    // 4. Create tools
-    let shared_mode: Arc<RwLock<Temm1eMode>> = Arc::new(RwLock::new(setup.config.mode));
+    // 4. Determine personality mode
+    let initial_mode = match setup.mode.as_deref() {
+        Some("work") => Temm1eMode::Work,
+        Some("pro") => Temm1eMode::Pro,
+        _ => Temm1eMode::Play, // "auto" and "play" both start as Play
+    };
+    let shared_mode: Arc<RwLock<Temm1eMode>> = Arc::new(RwLock::new(initial_mode));
 
     let tools = temm1e_tools::create_tools(
         &setup.config.tools,

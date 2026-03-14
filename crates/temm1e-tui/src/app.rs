@@ -57,6 +57,7 @@ pub struct AppState {
     // Config
     pub current_model: Option<String>,
     pub current_provider: Option<String>,
+    pub selected_mode: Option<String>,
 
     // Commands
     pub command_registry: CommandRegistry,
@@ -97,6 +98,7 @@ impl AppState {
             token_counter: TokenCounter::new(),
             current_model: None,
             current_provider: None,
+            selected_mode: None,
             command_registry: CommandRegistry::new(),
             theme,
             onboarding_step: OnboardingStep::Welcome,
@@ -501,10 +503,25 @@ fn handle_onboarding_key(state: &mut AppState, key: crossterm::event::KeyEvent) 
     match &mut state.onboarding_step {
         OnboardingStep::Welcome => {
             if key.code == KeyCode::Enter {
-                let items = steps::provider_select_items();
-                state.onboarding_step = OnboardingStep::SelectProvider(SelectState::new(items));
+                let items = steps::mode_select_items();
+                state.onboarding_step = OnboardingStep::SelectMode(SelectState::new(items));
             }
         }
+        OnboardingStep::SelectMode(select) => match key.code {
+            KeyCode::Up => select.move_up(),
+            KeyCode::Down => select.move_down(),
+            KeyCode::Enter => {
+                if let Some(mode) = select.selected_value().cloned() {
+                    state.selected_mode = Some(mode);
+                    let items = steps::provider_select_items();
+                    state.onboarding_step = OnboardingStep::SelectProvider(SelectState::new(items));
+                }
+            }
+            KeyCode::Esc => {
+                state.onboarding_step = OnboardingStep::Welcome;
+            }
+            _ => {}
+        },
         OnboardingStep::SelectProvider(select) => match key.code {
             KeyCode::Up => select.move_up(),
             KeyCode::Down => select.move_down(),
@@ -518,7 +535,8 @@ fn handle_onboarding_key(state: &mut AppState, key: crossterm::event::KeyEvent) 
                 }
             }
             KeyCode::Esc => {
-                state.onboarding_step = OnboardingStep::Welcome;
+                let items = steps::mode_select_items();
+                state.onboarding_step = OnboardingStep::SelectMode(SelectState::new(items));
             }
             _ => {}
         },

@@ -6,6 +6,7 @@ use crate::widgets::select_list::{SelectItem, SelectState};
 #[derive(Debug, Clone)]
 pub enum OnboardingStep {
     Welcome,
+    SelectMode(SelectState<String>),
     SelectProvider(SelectState<String>),
     EnterApiKey {
         provider: String,
@@ -22,6 +23,32 @@ pub enum OnboardingStep {
     },
     Saving,
     Done,
+}
+
+/// Create the mode selection list.
+pub fn mode_select_items() -> Vec<SelectItem<String>> {
+    vec![
+        SelectItem {
+            value: "auto".to_string(),
+            label: "Auto".to_string(),
+            description: "Adapts personality to each task (recommended)".to_string(),
+        },
+        SelectItem {
+            value: "play".to_string(),
+            label: "Play  :3".to_string(),
+            description: "Warm, energetic, slightly chaotic".to_string(),
+        },
+        SelectItem {
+            value: "work".to_string(),
+            label: "Work >:3".to_string(),
+            description: "Sharp, precise, structured".to_string(),
+        },
+        SelectItem {
+            value: "pro".to_string(),
+            label: "Pro".to_string(),
+            description: "Professional, no emoticons, consultant tone".to_string(),
+        },
+    ]
 }
 
 /// Create the provider selection list.

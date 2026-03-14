@@ -23,6 +23,31 @@ pub fn render_onboarding(step: &OnboardingStep, theme: &Theme, area: Rect, buf: 
 
     match step {
         OnboardingStep::Welcome => render_welcome(theme, inner, buf),
+        OnboardingStep::SelectMode(state) => {
+            let widget = SelectListWidget::new(state)
+                .normal_style(theme.text)
+                .selected_style(theme.accent.add_modifier(Modifier::REVERSED))
+                .description_style(theme.secondary);
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(2),
+                    Constraint::Min(1),
+                    Constraint::Length(2),
+                ])
+                .split(inner);
+            let title = Paragraph::new(vec![
+                Line::from(""),
+                Line::from(Span::styled(" How should Tem behave?", theme.heading)),
+            ]);
+            title.render(chunks[0], buf);
+            widget.render(chunks[1], buf);
+            let hint = Paragraph::new(Line::from(Span::styled(
+                "  \u{2191}\u{2193} select  Enter confirm  Esc back",
+                theme.secondary,
+            )));
+            hint.render(chunks[2], buf);
+        }
         OnboardingStep::SelectProvider(state) => {
             let widget = SelectListWidget::new(state)
                 .normal_style(theme.text)

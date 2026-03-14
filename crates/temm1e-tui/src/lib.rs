@@ -133,6 +133,7 @@ pub async fn launch_tui(config: Temm1eConfig) -> anyhow::Result<()> {
                 model: model.clone(),
                 base_url: load_active_provider_keys().and_then(|(_, _, _, burl)| burl),
                 config: config.clone(),
+                mode: None, // Use default when loading saved credentials
             },
             event_tx.clone(),
         )
@@ -322,6 +323,7 @@ async fn handle_onboarding_async(
                                 model: model.clone(),
                                 base_url: None,
                                 config: config.clone(),
+                                mode: state.selected_mode.clone(),
                             },
                             event_tx.clone(),
                         )

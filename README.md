@@ -6,14 +6,14 @@
   <a href="https://github.com/nagisanzenin/temm1e/stargazers"><img src="https://img.shields.io/github/stars/nagisanzenin/temm1e?style=flat&color=gold&logo=github" alt="GitHub Stars"></a>
   <a href="https://discord.gg/3ux2c5xz"><img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-2.6.0-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-2.7.0-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/rust-1.82+-orange.svg" alt="Rust 1.82+">
 </p>
 
 <h3 align="center">Autonomous AI agent runtime in Rust.<br>Deploy once. Stays up forever.</h3>
 
 <p align="center">
-  <code>63K lines</code> · <code>1,394 tests</code> · <code>0 warnings</code> · <code>0 panic paths</code> · <code>15 MB idle</code> · <code>31ms cold start</code>
+  <code>69K lines</code> · <code>1,413 tests</code> · <code>0 warnings</code> · <code>0 panic paths</code> · <code>15 MB idle</code> · <code>31ms cold start</code>
 </p>
 
 ---
@@ -24,13 +24,55 @@ Hi! I'm Tem. I'm an autonomous AI agent that lives on your server and never stop
 
 My brain has a BUDGET and I am VERY responsible with it.
 
-> **Quick start** — 30 seconds if you have Rust and a Telegram bot token:
+> **Quick start** — interactive TUI, no external services needed:
 > ```bash
 > git clone https://github.com/nagisanzenin/temm1e.git && cd temm1e
+> cargo build --release --features tui
+> ./target/release/temm1e tui
+> ```
+> First run walks you through provider setup with an arrow-key wizard.
+
+> **Server mode** — deploy as a persistent agent on Telegram/Discord/Slack:
+> ```bash
 > cargo build --release
 > export TELEGRAM_BOT_TOKEN="your-token"
 > ./target/release/temm1e start
 > ```
+
+---
+
+## Interactive TUI
+
+`temm1e tui` gives you a Claude Code-level terminal experience — talk to Tem directly from your terminal with rich markdown rendering, syntax-highlighted code blocks, and real-time agent observability.
+
+```
+   +                  *          ╭─ python ─
+        /\_/\                    │ def hello():
+   *   ( o.o )   +               │     print("hOI!!")
+        > ^ <                    │
+       /|~~~|\                   │ if __name__ == "__main__":
+       ( ♥   )                   │     hello()
+   *    ~~   ~~                  ╰───
+
+     T E M M 1 E                tem> write me a hello world
+   your local AI agent          ◜ Thinking  2.1s
+```
+
+**Features:**
+- Arrow-key onboarding wizard (provider + model + personality mode)
+- Markdown rendering with **bold**, *italic*, `inline code`, and fenced code blocks
+- Syntax highlighting via syntect (Solarized Dark) with bordered code blocks
+- Animated thinking indicator showing agent phase (Classifying → Thinking → shell → Finishing)
+- 9 slash commands (`/help`, `/model`, `/clear`, `/config`, `/keys`, `/usage`, `/status`, `/compact`, `/quit`)
+- File drag-and-drop — drop a file path into the terminal to attach it
+- Path and URL highlighting (underlined, clickable)
+- Mouse wheel scrolling + PageUp/PageDown through full chat history
+- Personality modes: Auto (recommended), Play :3, Work >:3, Pro
+- Ctrl+C twice to exit (like Claude Code)
+- Tem's 7-color palette with truecolor/256-color/NO_COLOR degradation
+- Token and cost tracking in the status bar
+
+> **Install globally:** `cp target/release/temm1e ~/.local/bin/temm1e` then run `temm1e tui` from anywhere.
 
 ---
 
@@ -180,10 +222,10 @@ I discover and install MCP servers at runtime. I also write my own bash/python/n
 <td align="center"><strong>15 MB</strong><br><sub>Idle RAM</sub></td>
 <td align="center"><strong>31 ms</strong><br><sub>Cold start</sub></td>
 <td align="center"><strong>9.6 MB</strong><br><sub>Binary size</sub></td>
-<td align="center"><strong>1,394</strong><br><sub>Tests</sub></td>
+<td align="center"><strong>1,413</strong><br><sub>Tests</sub></td>
 <td align="center"><strong>8</strong><br><sub>AI Providers</sub></td>
 <td align="center"><strong>13</strong><br><sub>Built-in tools</sub></td>
-<td align="center"><strong>4</strong><br><sub>Channels</sub></td>
+<td align="center"><strong>5</strong><br><sub>Channels</sub></td>
 </tr>
 </table>
 
@@ -228,6 +270,7 @@ Paste any API key in Telegram — I detect the provider automatically:
 
 | Channel | Status |
 |---------|:------:|
+| **TUI** | Production |
 | [Telegram](docs/channels/telegram.md) | Production |
 | [Discord](docs/channels/discord.md) | Production |
 | [Slack](docs/channels/slack.md) | Production |
@@ -252,7 +295,7 @@ Shell, stealth browser (vision click_at), file read/write/list, web fetch, git, 
 
 ## Architecture
 
-15-crate Cargo workspace:
+16-crate Cargo workspace:
 
 ```
 temm1e (binary)
@@ -261,6 +304,7 @@ temm1e (binary)
 ├─ temm1e-agent          TEM'S MIND — 25 modules, blueprint system, executable DAG
 ├─ temm1e-providers      Anthropic + OpenAI-compatible (7 providers via one adapter)
 ├─ temm1e-codex-oauth    ChatGPT Plus/Pro via OAuth PKCE
+├─ temm1e-tui            Interactive terminal UI (ratatui + syntect)
 ├─ temm1e-channels       Telegram, Discord, Slack, CLI
 ├─ temm1e-memory         SQLite + Markdown with automatic failover
 ├─ temm1e-vault          ChaCha20-Poly1305 encrypted secrets
@@ -311,9 +355,10 @@ export TELEGRAM_BOT_TOKEN="your-token"
 ## CLI Reference
 
 ```
+temm1e tui                   Interactive TUI (--features tui)
 temm1e start                 Start the gateway (foreground or -d for daemon)
 temm1e stop                  Graceful shutdown
-temm1e chat                  Interactive CLI chat
+temm1e chat                  Interactive CLI chat (basic, no TUI)
 temm1e status                Show running state
 temm1e update                Pull latest + rebuild
 temm1e auth login            Codex OAuth (browser or --headless)
@@ -344,6 +389,8 @@ Requires Rust 1.82+ and Chrome/Chromium (for the browser tool).
 <summary><strong>Release Timeline</strong> — every version from first breath to now</summary>
 
 ```
+2026-03-15  v2.7.0  ●━━━ Interactive TUI — temm1e-tui crate (ratatui + syntect), arrow-key onboarding, markdown rendering, syntax-highlighted code blocks, agent observability, slash commands, personality modes, mouse scroll, file drag-and-drop, credential extraction to temm1e-core
+                    │
 2026-03-14  v2.6.0  ●━━━ Introduce TEMM1E — vision browser (screenshot→LLM→click_at via CDP), Tool trait vision extension, model_supports_vision gating, message dedup fixes, interceptor unlimited output, blueprint notification, Tem identity
                     │
 2026-03-13  v2.5.0  ●━━━ Executable DAG + Blueprint System — phase parallelism via FuturesUnordered, phase parser + TaskGraph bridge, /reload /reset commands, factory reset CLI, 1394 tests
