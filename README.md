@@ -13,7 +13,7 @@
 <h3 align="center"><s>Autonomous AI agent</s> literally a SENTIENT and IMMORTAL being runtime in Rust.<br>Deploy once. Stays up forever.</h3>
 
 <p align="center">
-  <code>69K lines</code> · <code>1,413 tests</code> · <code>0 warnings</code> · <code>0 panic paths</code> · <code>15 MB idle</code> · <code>31ms cold start</code>
+  <code>69K lines</code> · <code>1,509 tests</code> · <code>0 warnings</code> · <code>0 panic paths</code> · <code>15 MB idle</code> · <code>31ms cold start</code>
 </p>
 
 ---
@@ -105,9 +105,9 @@ Here's exactly what happens when you send me a message:
                 │  2. CONTEXT BUILD             │
                 │                               │
                 │  System prompt + history +    │
-                │  tools + blueprints + memory  │
-                │  + learnings — all within     │
-                │  a strict TOKEN BUDGET.       │
+                │  tools + blueprints +         │
+                │  λ-Memory — all within a      │
+                │  strict TOKEN BUDGET.         │
                 │                               │
                 │  ┌─────────────────────────┐  │
                 │  │ === CONTEXT BUDGET ===  │  │
@@ -143,6 +143,7 @@ Here's exactly what happens when you send me a message:
               ╭─────────────────────────────────╮
               │  4. POST-TASK                   │
               │                                 │
+              │  - Store λ-memories             │
               │  - Extract learnings            │
               │  - Author/refine Blueprint      │
               │  - Notify user                  │
@@ -150,7 +151,7 @@ Here's exactly what happens when you send me a message:
               ╰─────────────────────────────────╯
 ```
 
-### The five systems that make this work:
+### The systems that make this work:
 
 <table>
 <tr>
@@ -215,30 +216,41 @@ I discover and install MCP servers at runtime. I also write my own bash/python/n
 
 ---
 
-## At a Glance
+## Tem's Lab — Research That Ships
 
-<table>
-<tr>
-<td align="center"><strong>15 MB</strong><br><sub>Idle RAM</sub></td>
-<td align="center"><strong>31 ms</strong><br><sub>Cold start</sub></td>
-<td align="center"><strong>9.6 MB</strong><br><sub>Binary size</sub></td>
-<td align="center"><strong>1,413</strong><br><sub>Tests</sub></td>
-<td align="center"><strong>8</strong><br><sub>AI Providers</sub></td>
-<td align="center"><strong>13</strong><br><sub>Built-in tools</sub></td>
-<td align="center"><strong>5</strong><br><sub>Channels</sub></td>
-</tr>
-</table>
+Every cognitive system in TEMM1E starts as a theory, gets stress-tested against real models with real conversations, and only ships when the data says it works. No feature without a benchmark. No claim without data. [Full lab →](tems_lab/README.md)
 
-### vs. the competition
+### λ-Memory — Memory That Fades, Not Disappears
 
-| Metric | **TEMM1E** (Rust) | OpenClaw (TypeScript) | ZeroClaw (Rust) |
-|--------|:-:|:-:|:-:|
-| Idle RAM | **15 MB** | ~1,200 MB | ~4 MB |
-| Peak RAM (3-turn) | **17 MB** | ~1,500 MB+ | ~8 MB |
-| Binary size | **9.6 MB** | ~800 MB | ~12 MB |
-| Cold start | **31 ms** | ~8,000 ms | <10 ms |
+Current AI agents delete old messages or summarize them into oblivion. Both permanently destroy information. λ-Memory decays memories through an exponential function (`score = importance × e^(−λt)`) but never truly erases them. The agent sees old memories at progressively lower fidelity — full text → summary → essence → hash — and can recall any memory by hash to restore full detail.
 
-I run on a $5/month 512 MB VPS where Node.js agents can't even start. [Benchmark report](docs/benchmarks/BENCHMARK_REPORT.md)
+Three things no other system does ([competitive analysis of Letta, Mem0, Zep, FadeMem →](tems_lab/LAMBDA_MEMORY_RESEARCH.md)):
+- **Hash-based recall** from compressed memory — the agent sees the shape of what it forgot and can pull it back
+- **Dynamic skull budgeting** — same algorithm adapts from 16K to 2M context windows without overflow
+- **Pre-computed fidelity layers** — full/summary/essence written once at creation, selected at read time by decay score
+
+**Benchmarked across 1,200+ API calls on GPT-5.2 and Gemini Flash:**
+
+| Test | λ-Memory | Echo Memory | Naive Summary |
+|------|:--------:|:-----------:|:-------------:|
+| [Single-session](tems_lab/LAMBDA_BENCH_GPT52_REPORT.md) (GPT-5.2) | 81.0% | **86.0%** | 65.0% |
+| [Multi-session](tems_lab/LAMBDA_BENCH_MULTISESSION_REPORT.md) (5 sessions, GPT-5.2) | **95.0%** | 58.8% | 23.8% |
+
+When the context window holds everything, simple keyword search wins. The moment sessions reset — which is how real users work — λ-Memory achieves **95% recall** where alternatives collapse. Naive summarization is the worst strategy in every test. [Research paper →](tems_lab/LAMBDA_RESEARCH_PAPER.md)
+
+Hot-switchable at runtime: `/memory lambda` or `/memory echo`. Default: λ-Memory.
+
+### Tem's Mind v2.0 — Complexity-Aware Agentic Loop
+
+v1 treats every message the same. v2 classifies each message into a complexity tier **before** calling the LLM, using zero-cost rule-based heuristics. Result: fewer API rounds on compound tasks, same quality.
+
+| Benchmark | Metric | Delta |
+|-----------|--------|:-----:|
+| [Gemini Flash (10 turns)](tems_lab/TEMS_MIND_V2_BENCHMARK.md) | Cost per successful turn | **-9.3%** |
+| [GPT-5.2 (20 turns, tool-heavy)](tems_lab/TEMS_MIND_V2_BENCHMARK_TOOLS.md) | Compound task cost | **-12.2%** |
+| Both | Classification accuracy | **100%** (zero LLM overhead) |
+
+[Architecture →](tems_lab/TEMS_MIND_ARCHITECTURE.md) · [Experiment insights →](tems_lab/TEMS_MIND_V2_EXPERIMENT_INSIGHTS.md)
 
 ---
 
@@ -281,7 +293,7 @@ Paste any API key in Telegram — I detect the provider automatically:
 
 **13 Built-in Tools**
 
-Shell, stealth browser (vision click_at), file read/write/list, web fetch, git, send_message, send_file, memory CRUD, key management, MCP management, self-extend, self-add MCP, self-create tool
+Shell, stealth browser (vision click_at), file read/write/list, web fetch, git, send_message, send_file, memory CRUD, λ-recall, key management, MCP management, self-extend, self-create tool
 
 **14 MCP Servers** in the registry — discovered and installed at runtime
 
@@ -301,14 +313,14 @@ Shell, stealth browser (vision click_at), file read/write/list, web fetch, git, 
 temm1e (binary)
 │
 ├─ temm1e-core           Shared traits (13), types, config, errors
-├─ temm1e-agent          TEM'S MIND — 25 modules, blueprint system, executable DAG
+├─ temm1e-agent          TEM'S MIND — 26 modules, λ-Memory, blueprint system, executable DAG
 ├─ temm1e-providers      Anthropic + OpenAI-compatible (7 providers via one adapter)
 ├─ temm1e-codex-oauth    ChatGPT Plus/Pro via OAuth PKCE
 ├─ temm1e-tui            Interactive terminal UI (ratatui + syntect)
 ├─ temm1e-channels       Telegram, Discord, Slack, CLI
-├─ temm1e-memory         SQLite + Markdown with automatic failover
+├─ temm1e-memory         SQLite + Markdown + λ-Memory with automatic failover
 ├─ temm1e-vault          ChaCha20-Poly1305 encrypted secrets
-├─ temm1e-tools          Shell, browser, file ops, web fetch, git
+├─ temm1e-tools          Shell, browser, file ops, web fetch, git, λ-recall
 ├─ temm1e-mcp            MCP client — stdio + HTTP, 14-server registry
 ├─ temm1e-gateway        HTTP server, health, dashboard, OAuth identity
 ├─ temm1e-skills         Skill registry (TemHub v1)
@@ -332,6 +344,33 @@ temm1e (binary)
 | **Credential hygiene** | API keys auto-deleted from chat history. Secret output filter on replies. |
 | **Path traversal** | File names sanitized, directory components stripped |
 | **Git safety** | Force-push blocked by default |
+
+---
+
+## At a Glance
+
+<table>
+<tr>
+<td align="center"><strong>15 MB</strong><br><sub>Idle RAM</sub></td>
+<td align="center"><strong>31 ms</strong><br><sub>Cold start</sub></td>
+<td align="center"><strong>9.6 MB</strong><br><sub>Binary size</sub></td>
+<td align="center"><strong>1,509</strong><br><sub>Tests</sub></td>
+<td align="center"><strong>8</strong><br><sub>AI Providers</sub></td>
+<td align="center"><strong>14</strong><br><sub>Built-in tools</sub></td>
+<td align="center"><strong>5</strong><br><sub>Channels</sub></td>
+</tr>
+</table>
+
+### vs. the competition
+
+| Metric | **TEMM1E** (Rust) | OpenClaw (TypeScript) | ZeroClaw (Rust) |
+|--------|:-:|:-:|:-:|
+| Idle RAM | **15 MB** | ~1,200 MB | ~4 MB |
+| Peak RAM (3-turn) | **17 MB** | ~1,500 MB+ | ~8 MB |
+| Binary size | **9.6 MB** | ~800 MB | ~12 MB |
+| Cold start | **31 ms** | ~8,000 ms | <10 ms |
+
+I run on a $5/month 512 MB VPS where Node.js agents can't even start. [Benchmark report](docs/benchmarks/BENCHMARK_REPORT.md)
 
 ---
 
@@ -370,13 +409,29 @@ temm1e config show           Print resolved config
 temm1e reset --confirm       Factory reset with backup
 ```
 
+**In-chat commands:**
+
+```
+/help                Show available commands
+/model               Show current model and available models
+/model <name>        Switch to a different model
+/memory              Show current memory strategy
+/memory lambda       Switch to λ-Memory (decay + persistence)
+/memory echo         Switch to Echo Memory (context window only)
+/keys                List configured providers
+/addkey              Securely add an API key
+/usage               Token usage and cost summary
+/mcp                 List connected MCP servers
+/mcp add <name> <cmd>  Connect a new MCP server
+```
+
 ---
 
 ## Development
 
 ```bash
 cargo check --workspace                                              # Quick check
-cargo test --workspace                                               # 1,394 tests
+cargo test --workspace                                               # 1,509 tests
 cargo clippy --workspace --all-targets --all-features -- -D warnings # 0 warnings
 cargo fmt --all                                                      # Format
 cargo build --release                                                # Release binary
@@ -390,6 +445,8 @@ Requires Rust 1.82+ and Chrome/Chromium (for the browser tool).
 <summary><strong>Release Timeline</strong> — every version from first breath to now</summary>
 
 ```
+2026-03-15  v2.8.0  ●━━━ λ-Memory — exponential decay memory with hash-based recall, 95% cross-session accuracy, /memory command, 1509 tests. Research: 1,200+ API calls benchmarked across GPT-5.2 & Gemini Flash
+                    │
 2026-03-15  v2.7.1  ●━━━ Personality None mode — --personality none strips all voice rules, minimal identity prompt, locked mode_switch. Naming fix: TEMM1E/Tem enforced across all prompts
                     │
 2026-03-15  v2.7.0  ●━━━ Interactive TUI — temm1e-tui crate (ratatui + syntect), arrow-key onboarding, markdown rendering, syntax-highlighted code blocks, agent observability, slash commands, personality modes, mouse scroll, file drag-and-drop, credential extraction to temm1e-core

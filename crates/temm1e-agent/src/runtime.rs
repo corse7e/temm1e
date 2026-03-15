@@ -87,6 +87,8 @@ pub struct AgentRuntime {
     /// injected into the system prompt on every request so the LLM adapts
     /// its voice accordingly. Updated at runtime by the mode_switch tool.
     shared_mode: Option<SharedMode>,
+    /// Shared memory strategy (Lambda or Echo). Updated at runtime by /memory command.
+    shared_memory_strategy: Option<Arc<RwLock<temm1e_core::types::config::MemoryStrategy>>>,
 }
 
 impl AgentRuntime {
@@ -118,6 +120,7 @@ impl AgentRuntime {
             v2_optimizations: true,
             parallel_phases: false,
             shared_mode: None,
+            shared_memory_strategy: None,
         }
     }
 
@@ -183,6 +186,7 @@ impl AgentRuntime {
             v2_optimizations: true,
             parallel_phases: false,
             shared_mode: None,
+            shared_memory_strategy: None,
         }
     }
 
@@ -196,6 +200,15 @@ impl AgentRuntime {
     /// Set the shared personality mode from an Option (convenience for propagation).
     pub fn with_shared_mode_opt(mut self, mode: Option<SharedMode>) -> Self {
         self.shared_mode = mode;
+        self
+    }
+
+    /// Set the shared memory strategy handle (updated by /memory command).
+    pub fn with_shared_memory_strategy(
+        mut self,
+        strategy: Arc<RwLock<temm1e_core::types::config::MemoryStrategy>>,
+    ) -> Self {
+        self.shared_memory_strategy = Some(strategy);
         self
     }
 
@@ -683,6 +696,13 @@ impl AgentRuntime {
 
             // Build the completion request from full context
             let prompt_tier = execution_profile.as_ref().map(|p| p.prompt_tier);
+            let lambda_enabled = match &self.shared_memory_strategy {
+                Some(strategy) => {
+                    *strategy.read().await
+                        == temm1e_core::types::config::MemoryStrategy::Lambda
+                }
+                None => true, // default: λ-Memory enabled
+            };
             let mut request = build_context(
                 session,
                 self.memory.as_ref(),
@@ -693,6 +713,7 @@ impl AgentRuntime {
                 self.max_context_tokens,
                 prompt_tier,
                 &matched_blueprints,
+                lambda_enabled,
             )
             .await;
 
@@ -937,6 +958,59 @@ impl AgentRuntime {
                         }
                         // Retries exhausted or not first round — use text as-is
                     }
+                }
+            }
+
+            // ── λ-Memory: parse <memory> blocks from response ──────
+            if !text_parts.is_empty() {
+                let combined_for_lambda = text_parts.join("\n");
+                if let Some(parsed) =
+                    crate::lambda_memory::parse_memory_block(&combined_for_lambda)
+                {
+                    let user_text = extract_latest_user_text(&session.history);
+                    let assistant_text =
+                        crate::lambda_memory::strip_memory_blocks(&combined_for_lambda);
+                    let full_text = format!(
+                        "User: {}\nAssistant: {}",
+                        truncate_str(&user_text, 500),
+                        truncate_str(&assistant_text, 500),
+                    );
+
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+
+                    let hash =
+                        crate::lambda_memory::make_hash(&session.session_id, rounds, now);
+
+                    let is_explicit = user_text.to_lowercase().contains("remember");
+
+                    let entry = temm1e_core::LambdaMemoryEntry {
+                        hash: hash.clone(),
+                        created_at: now,
+                        last_accessed: now,
+                        access_count: 0,
+                        importance: parsed.importance,
+                        explicit_save: is_explicit,
+                        full_text,
+                        summary_text: parsed.summary,
+                        essence_text: parsed.essence,
+                        tags: parsed.tags,
+                        memory_type: temm1e_core::LambdaMemoryType::Conversation,
+                        session_id: session.session_id.clone(),
+                    };
+
+                    if let Err(e) = self.memory.lambda_store(entry).await {
+                        warn!(error = %e, "Failed to store λ-memory");
+                    } else {
+                        debug!(hash = %hash, "Stored λ-memory");
+                    }
+                }
+
+                // Strip <memory> blocks from text before user sees them
+                for part in &mut text_parts {
+                    *part = crate::lambda_memory::strip_memory_blocks(part);
                 }
             }
 
@@ -1631,6 +1705,41 @@ async fn refine_blueprint(
         .map_err(|e| Temm1eError::Provider(format!("Failed to parse refined blueprint: {e}")))?;
     blueprint.body = refined.body;
     Ok(())
+}
+
+/// Extract the most recent user text from conversation history (for λ-Memory).
+fn extract_latest_user_text(history: &[temm1e_core::types::message::ChatMessage]) -> String {
+    use temm1e_core::types::message::{ContentPart, MessageContent, Role};
+    history
+        .iter()
+        .rev()
+        .find(|m| matches!(m.role, Role::User))
+        .map(|m| match &m.content {
+            MessageContent::Text(t) => t.clone(),
+            MessageContent::Parts(parts) => parts
+                .iter()
+                .filter_map(|p| match p {
+                    ContentPart::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        })
+        .unwrap_or_default()
+}
+
+/// Truncate a string to a maximum number of characters.
+fn truncate_str(s: &str, max_chars: usize) -> &str {
+    if s.len() <= max_chars {
+        s
+    } else {
+        // Find a char boundary to avoid panicking
+        let mut end = max_chars;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        &s[..end]
+    }
 }
 
 /// Extract concatenated text from a CompletionResponse's content parts.

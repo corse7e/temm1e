@@ -1367,6 +1367,8 @@ async fn main() -> Result<()> {
                 .map(|ch| Arc::new(SecretCensorChannel { inner: ch }) as Arc<dyn Channel>);
             let shared_mode: temm1e_tools::SharedMode =
                 Arc::new(tokio::sync::RwLock::new(config.mode));
+            let shared_memory_strategy: Arc<tokio::sync::RwLock<temm1e_core::types::config::MemoryStrategy>> =
+                Arc::new(tokio::sync::RwLock::new(temm1e_core::types::config::MemoryStrategy::Lambda));
             let mut tools = temm1e_tools::create_tools(
                 &config.tools,
                 censored_channel,
@@ -1485,7 +1487,7 @@ async fn main() -> Result<()> {
                         )
                         .with_v2_optimizations(config.agent.v2_optimizations)
                         .with_parallel_phases(config.agent.parallel_phases)
-                        .with_shared_mode(shared_mode.clone()),
+                        .with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()),
                     );
                     *agent_state.write().await = Some(agent);
                     tracing::info!(provider = %pname, model = %model, "Agent initialized");
@@ -1520,7 +1522,7 @@ async fn main() -> Result<()> {
                                     )
                                     .with_v2_optimizations(config.agent.v2_optimizations)
                                     .with_parallel_phases(config.agent.parallel_phases)
-                                    .with_shared_mode(shared_mode.clone()),
+                                    .with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()),
                                 );
                                 *agent_state.write().await = Some(agent);
                                 tracing::info!(provider = "openai-codex", model = %model, "Agent initialized via Codex OAuth");
@@ -1789,6 +1791,7 @@ async fn main() -> Result<()> {
 
                         // Ensure a worker exists for this chat_id
                         let shared_mode_for_worker = shared_mode.clone();
+                        let shared_memory_strategy_for_worker = shared_memory_strategy.clone();
                         let slot = slots.entry(chat_id.clone()).or_insert_with(|| {
                             let (chat_tx, mut chat_rx) =
                                 tokio::sync::mpsc::channel::<temm1e_core::types::message::InboundMessage>(4);
@@ -1823,6 +1826,7 @@ async fn main() -> Result<()> {
                             let cancel_token_clone = cancel_token.clone();
                             let pending_for_worker = pending_clone.clone();
                             let shared_mode = shared_mode_for_worker;
+                            let shared_memory_strategy = shared_memory_strategy_for_worker;
                             let setup_tokens_worker = setup_tokens_clone.clone();
                             let pending_raw_keys_worker = pending_raw_keys_clone.clone();
                             let usage_store_worker = usage_store_clone.clone();
@@ -1996,7 +2000,7 @@ async fn main() -> Result<()> {
                                                                 max_rounds,
                                                                 max_task_duration,
                                                                 max_spend,
-                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()));
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()));
                                                             *agent_state.write().await = Some(new_agent);
                                                             tracing::info!(
                                                                 provider = "openai-codex",
@@ -2040,7 +2044,7 @@ async fn main() -> Result<()> {
                                                                 max_rounds,
                                                                 max_task_duration,
                                                                 max_spend,
-                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()));
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()));
                                                             *agent_state.write().await = Some(new_agent);
                                                             tracing::info!(
                                                                 provider = %creds.active,
@@ -2155,6 +2159,9 @@ Available commands:\n\n\
 /model <name> — Switch to a different model\n\
 /removekey <provider> — Remove a provider's API key\n\
 /usage — Show token usage and cost summary\n\
+/memory — Show current memory strategy\n\
+/memory lambda — Switch to λ-Memory (decay + persistence)\n\
+/memory echo — Switch to Echo Memory (context window only)\n\
 /mcp — List connected MCP servers and tools\n\
 /mcp add <name> <command-or-url> — Connect a new MCP server\n\
 /mcp remove <name> — Disconnect an MCP server\n\
@@ -2170,6 +2177,39 @@ Just type a message to chat with the AI agent.",
                                         let reply = temm1e_core::types::message::OutboundMessage {
                                             chat_id: msg.chat_id.clone(),
                                             text: help_text.to_string(),
+                                            reply_to: Some(msg.id.clone()),
+                                            parse_mode: None,
+                                        };
+                                        send_with_retry(&*sender, reply).await;
+                                        is_heartbeat_clone.store(false, Ordering::Relaxed);
+                                        return;
+                                    }
+
+                                    // /memory — switch memory strategy
+                                    if cmd_lower == "/memory" || cmd_lower.starts_with("/memory ") {
+                                        let args = if cmd_lower == "/memory" { "" } else { msg_text_cmd.trim()["/memory".len()..].trim() };
+                                        let args_lower = args.to_lowercase();
+                                        let response = if args_lower.is_empty() || args_lower == "status" {
+                                            let current = shared_memory_strategy.read().await;
+                                            format!(
+                                                "Memory Strategy: {}\n\n\
+                                                 Available strategies:\n\
+                                                 • /memory lambda — λ-Memory: decay-scored, cross-session persistence, hash-based recall (default)\n\
+                                                 • /memory echo — Echo Memory: keyword search over current context window, no persistence",
+                                                *current,
+                                            )
+                                        } else if args_lower == "lambda" || args_lower == "λ" {
+                                            *shared_memory_strategy.write().await = temm1e_core::types::config::MemoryStrategy::Lambda;
+                                            "Switched to λ-Memory\nDecay-scored fidelity tiers • cross-session persistence • hash-based recall".to_string()
+                                        } else if args_lower == "echo" {
+                                            *shared_memory_strategy.write().await = temm1e_core::types::config::MemoryStrategy::Echo;
+                                            "Switched to Echo Memory\nKeyword search over context window • no persistence between sessions".to_string()
+                                        } else {
+                                            "Unknown strategy. Use: /memory lambda or /memory echo".to_string()
+                                        };
+                                        let reply = temm1e_core::types::message::OutboundMessage {
+                                            chat_id: msg.chat_id.clone(),
+                                            text: response,
                                             reply_to: Some(msg.id.clone()),
                                             parse_mode: None,
                                         };
@@ -2260,7 +2300,7 @@ Just type a message to chat with the AI agent.",
                                                                     agent.model().to_string(),
                                                                     Some(build_system_prompt()),
                                                                     max_turns, max_ctx, max_rounds, max_task_duration, max_spend,
-                                                                ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()));
+                                                                ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()));
                                                                 *agent_state.write().await = Some(new_agent);
                                                             }
                                                             mcp_mgr.take_tools_changed();
@@ -2289,7 +2329,7 @@ Just type a message to chat with the AI agent.",
                                                             agent.model().to_string(),
                                                             Some(build_system_prompt()),
                                                             max_turns, max_ctx, max_rounds, max_task_duration, max_spend,
-                                                        ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()));
+                                                        ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()));
                                                         *agent_state.write().await = Some(new_agent);
                                                     }
                                                     mcp_mgr.take_tools_changed();
@@ -2316,7 +2356,7 @@ Just type a message to chat with the AI agent.",
                                                             agent.model().to_string(),
                                                             Some(build_system_prompt()),
                                                             max_turns, max_ctx, max_rounds, max_task_duration, max_spend,
-                                                        ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()));
+                                                        ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()));
                                                         *agent_state.write().await = Some(new_agent);
                                                     }
                                                     mcp_mgr.take_tools_changed();
@@ -2393,7 +2433,7 @@ Just type a message to chat with the AI agent.",
                                                                 max_rounds,
                                                                 max_task_duration,
                                                                 max_spend,
-                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()));
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()));
                                                             *agent_state.write().await = Some(new_agent);
                                                             tracing::info!(
                                                                 provider = %prov.name,
@@ -2595,7 +2635,7 @@ Just type a message to chat with the AI agent.",
                                                                 max_rounds,
                                                                 max_task_duration,
                                                                 max_spend,
-                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()));
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()));
                                                             *agent_state.write().await = Some(new_agent);
                                                             let reply = temm1e_core::types::message::OutboundMessage {
                                                                 chat_id: msg.chat_id.clone(),
@@ -2707,7 +2747,7 @@ Just type a message to chat with the AI agent.",
                                                                 max_rounds,
                                                                 max_task_duration,
                                                                 max_spend,
-                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()));
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()));
                                                             *agent_state.write().await = Some(new_agent);
                                                             let key_count = keys.len();
                                                             let reply = temm1e_core::types::message::OutboundMessage {
@@ -2986,7 +3026,7 @@ Just type a message to chat with the AI agent.",
                                                                 max_rounds,
                                                                 max_task_duration,
                                                                 max_spend,
-                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()));
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()));
                                                             *agent_state.write().await = Some(new_agent);
                                                             tracing::info!(provider = %new_name, model = %new_model, "Agent hot-reloaded (key validated)");
                                                         }
@@ -3035,7 +3075,7 @@ Just type a message to chat with the AI agent.",
                                                 agent.model().to_string(),
                                                 Some(build_system_prompt()),
                                                 max_turns, max_ctx, max_rounds, max_task_duration, max_spend,
-                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()));
+                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()));
                                             *agent_state.write().await = Some(new_agent);
                                             tracing::info!("Agent rebuilt with updated MCP tools");
                                         }
@@ -3066,7 +3106,7 @@ Just type a message to chat with the AI agent.",
                                                 agent.model().to_string(),
                                                 Some(build_system_prompt()),
                                                 max_turns, max_ctx, max_rounds, max_task_duration, max_spend,
-                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()));
+                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()));
                                             *agent_state.write().await = Some(new_agent);
                                             tracing::info!("Agent rebuilt with updated custom tools");
                                         }
@@ -3117,7 +3157,7 @@ Just type a message to chat with the AI agent.",
                                                                 max_rounds,
                                                                 max_task_duration,
                                                                 max_spend,
-                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()));
+                                                            ).with_v2_optimizations(v2_opt).with_parallel_phases(pp_opt).with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()));
                                                             *agent_state.write().await = Some(new_agent);
 
                                                             if let Err(e) = save_credentials(provider_name, &api_key, &model, custom_base_url.as_deref()).await {
@@ -3420,6 +3460,8 @@ Just type a message to chat with the AI agent.",
             });
             let shared_mode: temm1e_tools::SharedMode =
                 Arc::new(tokio::sync::RwLock::new(config.mode));
+            let shared_memory_strategy: Arc<tokio::sync::RwLock<temm1e_core::types::config::MemoryStrategy>> =
+                Arc::new(tokio::sync::RwLock::new(temm1e_core::types::config::MemoryStrategy::Lambda));
             let mut tools_template = temm1e_tools::create_tools(
                 &config.tools,
                 Some(censored_cli),
@@ -3543,7 +3585,7 @@ Just type a message to chat with the AI agent.",
                                 )
                                 .with_v2_optimizations(v2_opt)
                                 .with_parallel_phases(pp_opt)
-                                .with_shared_mode(shared_mode.clone()),
+                                .with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()),
                             );
                             println!("Connected to {} (model: {})", pname, model);
                             if max_spend > 0.0 {
@@ -3590,7 +3632,7 @@ Just type a message to chat with the AI agent.",
                                     )
                                     .with_v2_optimizations(v2_opt)
                                     .with_parallel_phases(pp_opt)
-                                    .with_shared_mode(shared_mode.clone()),
+                                    .with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()),
                                 );
                                 println!(
                                     "Connected to openai-codex via Codex OAuth (model: {})",
@@ -3727,6 +3769,9 @@ Just type a message to chat with the AI agent.",
                          /model <name> — Switch to a different model\n\
                          /removekey <provider> — Remove a provider's API key\n\
                          /usage — Show token usage and cost summary\n\
+                         /memory — Show current memory strategy\n\
+                         /memory lambda — Switch to λ-Memory (decay + persistence)\n\
+                         /memory echo — Switch to Echo Memory (context window only)\n\
                          /mcp — List connected MCP servers and tools\n\
                          /mcp add <name> <command-or-url> — Connect a new MCP server\n\
                          /mcp remove <name> — Disconnect an MCP server\n\
@@ -3737,6 +3782,32 @@ Just type a message to chat with the AI agent.",
                         env!("GIT_HASH"),
                         env!("BUILD_DATE"),
                     );
+                    eprint!("temm1e> ");
+                    continue;
+                }
+
+                // /memory — switch memory strategy
+                if cmd_lower == "/memory" || cmd_lower.starts_with("/memory ") {
+                    let args = if cmd_lower == "/memory" { "" } else { msg_text.trim()["/memory".len()..].trim() };
+                    let args_lower = args.to_lowercase();
+                    if args_lower.is_empty() || args_lower == "status" {
+                        let current = shared_memory_strategy.read().await;
+                        println!(
+                            "\nMemory Strategy: {}\n\n\
+                             Available strategies:\n\
+                             • /memory lambda — λ-Memory: decay-scored, cross-session persistence, hash-based recall (default)\n\
+                             • /memory echo — Echo Memory: keyword search over current context window, no persistence\n",
+                            *current,
+                        );
+                    } else if args_lower == "lambda" || args_lower == "λ" {
+                        *shared_memory_strategy.write().await = temm1e_core::types::config::MemoryStrategy::Lambda;
+                        println!("\nSwitched to λ-Memory\nDecay-scored fidelity tiers • cross-session persistence • hash-based recall\n");
+                    } else if args_lower == "echo" {
+                        *shared_memory_strategy.write().await = temm1e_core::types::config::MemoryStrategy::Echo;
+                        println!("\nSwitched to Echo Memory\nKeyword search over context window • no persistence between sessions\n");
+                    } else {
+                        println!("\nUnknown strategy. Use: /memory lambda or /memory echo\n");
+                    }
                     eprint!("temm1e> ");
                     continue;
                 }
@@ -3828,7 +3899,7 @@ Just type a message to chat with the AI agent.",
                                                 )
                                                 .with_v2_optimizations(v2_opt)
                                                 .with_parallel_phases(pp_opt)
-                                                .with_shared_mode(shared_mode.clone()),
+                                                .with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()),
                                             );
                                         }
                                         mcp_manager.take_tools_changed();
@@ -3875,7 +3946,7 @@ Just type a message to chat with the AI agent.",
                                         )
                                         .with_v2_optimizations(v2_opt)
                                         .with_parallel_phases(pp_opt)
-                                        .with_shared_mode(shared_mode.clone()),
+                                        .with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()),
                                     );
                                 }
                                 mcp_manager.take_tools_changed();
@@ -3917,7 +3988,7 @@ Just type a message to chat with the AI agent.",
                                         )
                                         .with_v2_optimizations(v2_opt)
                                         .with_parallel_phases(pp_opt)
-                                        .with_shared_mode(shared_mode.clone()),
+                                        .with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()),
                                     );
                                 }
                                 mcp_manager.take_tools_changed();
@@ -3998,7 +4069,7 @@ Just type a message to chat with the AI agent.",
                                             )
                                             .with_v2_optimizations(v2_opt)
                                             .with_parallel_phases(pp_opt)
-                                            .with_shared_mode(shared_mode.clone()),
+                                            .with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()),
                                         );
                                         println!(
                                             "\nAPI key securely received and verified! Configured {} with model {}.",
@@ -4067,7 +4138,7 @@ Just type a message to chat with the AI agent.",
                                 )
                                 .with_v2_optimizations(v2_opt)
                                 .with_parallel_phases(pp_opt)
-                                .with_shared_mode(shared_mode.clone()),
+                                .with_shared_mode(shared_mode.clone()).with_shared_memory_strategy(shared_memory_strategy.clone()),
                             );
                             println!(
                                 "\nAPI key verified! Configured {} with model {}.",
